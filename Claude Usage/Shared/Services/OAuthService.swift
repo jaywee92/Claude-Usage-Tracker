@@ -46,7 +46,7 @@ final class OAuthService: NSObject {
         }
 
         // 3. Show browser sheet and wait for callback
-        let callbackURL = try await withCheckedThrowingContinuation { continuation in
+        let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: authURL,
                 callbackURLScheme: "claudeusage"
