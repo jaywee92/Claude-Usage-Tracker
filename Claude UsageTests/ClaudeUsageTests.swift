@@ -11,7 +11,7 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(usage.statusLevel, .safe)
 
         let usage25 = createUsage(sessionPercentage: 25)  // 75% remaining
-        XCTAssertEqual(usage.statusLevel, .safe)
+        XCTAssertEqual(usage25.statusLevel, .safe)
 
         let usage80 = createUsage(sessionPercentage: 80)  // 20% remaining (exact boundary)
         XCTAssertEqual(usage.statusLevel, .safe)
