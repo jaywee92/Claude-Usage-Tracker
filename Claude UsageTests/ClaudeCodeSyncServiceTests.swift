@@ -16,8 +16,8 @@ class ClaudeCodeSyncServiceTests: XCTestCase {
         keychain: "/Users/test/Library/Keychains/login.keychain-db"
         class: "genp"
         attributes:
-            "svce" <blob>="Claude Code-credentials-0f61c92a"
-            "acct" <blob>="testuser"
+            "svce"<blob>="Claude Code-credentials-0f61c92a"
+            "acct"<blob>="testuser"
         """
 
         let serviceName = service.extractServiceName(from: mockOutput)
@@ -33,8 +33,8 @@ class ClaudeCodeSyncServiceTests: XCTestCase {
         keychain: "/Users/test/Library/Keychains/login.keychain-db"
         class: "genp"
         attributes:
-            "svce" <blob>="Claude Code-credentials"
-            "acct" <blob>="testuser"
+            "svce"<blob>="Claude Code-credentials"
+            "acct"<blob>="testuser"
         """
 
         let serviceName = service.extractServiceName(from: mockOutput)
@@ -50,8 +50,8 @@ class ClaudeCodeSyncServiceTests: XCTestCase {
         keychain: "/Users/test/Library/Keychains/login.keychain-db"
         class: "genp"
         attributes:
-            "svce" <blob>="SomeOtherApp-credentials"
-            "acct" <blob>="testuser"
+            "svce"<blob>="SomeOtherApp-credentials"
+            "acct"<blob>="testuser"
         """
 
         let serviceName = service.extractServiceName(from: mockOutput)
@@ -66,13 +66,13 @@ class ClaudeCodeSyncServiceTests: XCTestCase {
         keychain: "/Users/test/Library/Keychains/login.keychain-db"
         class: "genp"
         attributes:
-            "svce" <blob>="SomeOtherApp"
-            "acct" <blob>="testuser"
+            "svce"<blob>="SomeOtherApp"
+            "acct"<blob>="testuser"
         keychain: "/Users/test/Library/Keychains/login.keychain-db"
         class: "genp"
         attributes:
-            "svce" <blob>="Claude Code-credentials-abc12345"
-            "acct" <blob>="testuser2"
+            "svce"<blob>="Claude Code-credentials-abc12345"
+            "acct"<blob>="testuser2"
         """
 
         let serviceName = service.extractServiceName(from: mockOutput)

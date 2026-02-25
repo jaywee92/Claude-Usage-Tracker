@@ -12,6 +12,9 @@ import Security
 class ClaudeCodeSyncService {
     static let shared = ClaudeCodeSyncService()
 
+    /// Cache for discovered service name (avoids repeated subprocess calls)
+    private var cachedServiceName: String?
+
     private init() {}
 
     // MARK: - Service Name Discovery
@@ -22,7 +25,7 @@ class ClaudeCodeSyncService {
     /// - Returns: The matched service name, or nil if not found
     func extractServiceName(from keychainOutput: String) -> String? {
         // Match "svce" blob value that starts with "Claude Code-credentials"
-        let pattern = #""svce" <blob>="(Claude Code-credentials[^"]*)""#
+        let pattern = #""svce"<blob>="(Claude Code-credentials[^"]*)""#
         guard let regex = try? NSRegularExpression(pattern: pattern),
               let match = regex.firstMatch(
                   in: keychainOutput,
@@ -38,16 +41,22 @@ class ClaudeCodeSyncService {
     /// Finds the actual keychain service name for Claude Code credentials.
     /// Handles both the standard name "Claude Code-credentials" and
     /// hash-suffixed variants like "Claude Code-credentials-0f61c92a".
-    /// - Returns: The actual service name in the keychain, falling back to the standard name
+    /// Result is cached after first successful discovery.
     private func findClaudeCodeServiceName() -> String {
-        // Use verbose search to get the service name from keychain metadata
+        // Return cached value if already discovered
+        if let cached = cachedServiceName {
+            return cached
+        }
+
+        // Use verbose search on the security parent command to get metadata
+        // Correct invocation: security -v find-generic-password -s "..." -a "..."
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = [
+            "-v",                             // verbose flag on the parent command
             "find-generic-password",
-            "-s", "Claude Code-credentials",
-            "-a", NSUserName(),
-            "-v"  // verbose mode outputs the "svce" blob we need
+            "-s", "Claude Code-credentials",  // seed search; finds prefix matches
+            "-a", NSUserName()
         ]
 
         let outputPipe = Pipe()
@@ -59,13 +68,14 @@ class ClaudeCodeSyncService {
             try process.run()
             process.waitUntilExit()
 
-            // security writes the attributes to stderr, password to stdout
+            // security -v writes attributes to stderr, password to stdout
             let stdout = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let combined = stdout + stderr
 
             if let discovered = extractServiceName(from: combined) {
                 LoggingService.shared.log("Discovered keychain service name: \(discovered)")
+                cachedServiceName = discovered
                 return discovered
             }
         } catch {
