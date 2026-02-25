@@ -19,6 +19,10 @@ class MenuBarManager: NSObject, ObservableObject {
     // Track when refresh was last triggered (for distinguishing user vs auto refresh)
     private var lastRefreshTriggerTime: Date = .distantPast
 
+    // Per-profile auth failure backoff: skip profiles that returned 403 until backoff expires
+    private var profileAuthBackoff: [UUID: Date] = [:]
+    private static let authBackoffDuration: TimeInterval = 5 * 60  // 5 minutes
+
     // Popover for beautiful SwiftUI interface
     private var popover: NSPopover?
 
@@ -387,6 +391,7 @@ class MenuBarManager: NSObject, ObservableObject {
         let contentView = PopoverContentView(
             manager: self,
             onRefresh: { [weak self] in
+                self?.lastRefreshTriggerTime = Date()  // Mark as user-initiated so backoff is bypassed
                 self?.refreshUsage()
             },
             onPreferences: { [weak self] in
@@ -737,12 +742,26 @@ class MenuBarManager: NSObject, ObservableObject {
             }
 
             // Fetch usage for each selected profile
+            let isManualRefresh = abs(self.lastRefreshTriggerTime.timeIntervalSinceNow) < 5
             for profile in selectedProfiles {
+                // Skip profiles that recently returned 403, unless the user explicitly requested a refresh
+                if !isManualRefresh, let lastFailure = self.profileAuthBackoff[profile.id] {
+                    let elapsed = Date().timeIntervalSince(lastFailure)
+                    if elapsed < Self.authBackoffDuration {
+                        let minutesRemaining = Int((Self.authBackoffDuration - elapsed) / 60) + 1
+                        LoggingService.shared.log("MenuBarManager: Skipping '\(profile.name)' (auth failed \(Int(elapsed / 60))m ago, retry in ~\(minutesRemaining)m)")
+                        continue
+                    }
+                }
+
                 LoggingService.shared.log("MenuBarManager: Fetching usage for profile '\(profile.name)'")
                 do {
                     let newUsage = try await fetchUsageForProfile(profile)
 
                     await MainActor.run {
+                        // Clear auth backoff on success
+                        self.profileAuthBackoff.removeValue(forKey: profile.id)
+
                         // Save to profile
                         self.profileManager.saveClaudeUsage(newUsage, for: profile.id)
                         LoggingService.shared.log("MenuBarManager: Saved usage for profile '\(profile.name)' - session: \(newUsage.sessionPercentage)%")
@@ -753,7 +772,16 @@ class MenuBarManager: NSObject, ObservableObject {
                         }
                     }
                 } catch {
-                    LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)")
+                    let appError = AppError.wrap(error)
+                    if appError.code == .apiUnauthorized {
+                        await MainActor.run {
+                            self.profileAuthBackoff[profile.id] = Date()
+                        }
+                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)")
+                        LoggingService.shared.log("MenuBarManager: Profile '\(profile.name)' auth failed — will skip for \(Int(Self.authBackoffDuration / 60))m (use manual refresh to retry sooner)")
+                    } else {
+                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)")
+                    }
                 }
             }
 
