@@ -241,8 +241,10 @@ class ProfileManager: ObservableObject {
         profileStore.saveActiveProfileId(id)
         profileStore.saveProfiles(profiles)
 
-        // Update statusline script if the new profile has credentials
-        if updated.claudeSessionKey != nil && updated.organizationId != nil {
+        // Update statusline script whenever a profile is activated
+        // Previously only triggered for profiles with claudeSessionKey — this missed
+        // CLI-OAuth profiles that only have cliCredentialsJSON (fixes #146)
+        if StatuslineService.shared.isInstalled {
             do {
                 try StatuslineService.shared.updateScriptsIfInstalled()
                 LoggingService.shared.log("✓ Updated statusline for profile: \(updated.name)")
