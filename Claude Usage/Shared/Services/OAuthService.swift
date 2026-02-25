@@ -95,10 +95,15 @@ final class OAuthService {
             throw OAuthError.invalidURL
         }
 
-        // OAuth 2.0 token endpoints require application/x-www-form-urlencoded (not JSON)
-        var components = URLComponents()
-        components.queryItems = body.map { URLQueryItem(name: $0.key, value: $0.value) }
-        guard let formBody = components.query?.data(using: .utf8) else {
+        // OAuth 2.0 token endpoints require application/x-www-form-urlencoded (not JSON).
+        // We percent-encode each value manually because URLComponents.query strips '#' fragments.
+        let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-._~"))
+        let formString = body.map { key, value in
+            let encodedKey   = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
+            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
+            return "\(encodedKey)=\(encodedValue)"
+        }.joined(separator: "&")
+        guard let formBody = formString.data(using: .utf8) else {
             throw OAuthError.tokenExchangeFailed
         }
 
