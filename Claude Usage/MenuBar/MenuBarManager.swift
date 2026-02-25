@@ -730,10 +730,10 @@ class MenuBarManager: NSObject, ObservableObject {
 
         LoggingService.shared.log("MenuBarManager: Refreshing \(selectedProfiles.count) selected profiles for multi-profile mode")
 
+        // Set synchronously before Task to block concurrent calls
+        isRefreshing = true
+
         Task {
-            await MainActor.run {
-                self.isRefreshing = true
-            }
 
             // Fetch Claude status (same as single profile mode)
             do {
