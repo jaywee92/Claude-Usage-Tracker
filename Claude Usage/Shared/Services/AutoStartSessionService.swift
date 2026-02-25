@@ -358,6 +358,12 @@ final class AutoStartSessionService {
             if let resetTime = parseCompletionResponseForResetTime(responseData) {
                 lastCapturedResetTime[profile.id] = resetTime
                 LoggingService.shared.logInfo("Captured session reset time for '\(profile.name)': \(resetTime)")
+            } else {
+                // Fallback: if we can't parse the reset time, use 5 hours from now
+                // This prevents repeated auto-starts when the response format is unexpected
+                let fallbackResetTime = Date().addingTimeInterval(5 * 60 * 60)
+                lastCapturedResetTime[profile.id] = fallbackResetTime
+                LoggingService.shared.logWarning("Could not parse reset time for '\(profile.name)' - using 5h fallback to prevent duplicate starts")
             }
 
             LoggingService.shared.logInfo("Successfully auto-started session for profile '\(profile.name)'")
@@ -460,13 +466,31 @@ final class AutoStartSessionService {
         deleteRequest.setValue("sessionKey=\(sessionKey)", forHTTPHeaderField: "Cookie")
         deleteRequest.httpMethod = "DELETE"
 
-        // Attempt to delete, but don't fail if deletion fails
+        // Attempt to delete the conversation to keep it out of chat history
         do {
-            _ = try await URLSession.shared.data(for: deleteRequest)
+            let (_, deleteResponse) = try await URLSession.shared.data(for: deleteRequest)
+            if let httpDeleteResponse = deleteResponse as? HTTPURLResponse {
+                if isSuccessfulDeleteStatus(httpDeleteResponse.statusCode) {
+                    LoggingService.shared.logInfo("Deleted initialization conversation: \(conversationUUID)")
+                } else {
+                    // Log the failure but don't throw — session is already initialized
+                    // Note: The conversation may remain visible in Claude.ai chat history
+                    LoggingService.shared.logWarning("Failed to delete initialization conversation (status: \(httpDeleteResponse.statusCode)). Conversation \(conversationUUID) may appear in chat history.")
+                }
+            }
         } catch {
-            // Silently ignore deletion errors - session is already initialized
+            // Network error during delete — session is already initialized, log and continue
+            LoggingService.shared.logWarning("Network error deleting initialization conversation: \(error.localizedDescription)")
         }
 
         return capturedData
+    }
+
+    // MARK: - Helpers
+
+    /// Returns true if the HTTP status code indicates a successful DELETE operation.
+    /// Both 200 OK and 204 No Content are valid success responses for DELETE.
+    func isSuccessfulDeleteStatus(_ statusCode: Int) -> Bool {
+        return statusCode == 200 || statusCode == 204
     }
 }
