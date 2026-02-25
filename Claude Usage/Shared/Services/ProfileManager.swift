@@ -30,6 +30,12 @@ class ProfileManager: ObservableObject {
     func loadProfiles() {
         profiles = profileStore.loadProfiles()
 
+        // Clear stale Claude usage data from previous calendar days
+        for i in 0..<profiles.count where ClaudeUsage.isStale(profiles[i].claudeUsage) {
+            profiles[i].claudeUsage = nil
+        }
+        LoggingService.shared.log("ProfileManager: Cleared stale usage data if any (day boundary check)")
+
         // Ensure minimum 1 profile
         if profiles.isEmpty {
             let defaultProfile = createDefaultProfile()
