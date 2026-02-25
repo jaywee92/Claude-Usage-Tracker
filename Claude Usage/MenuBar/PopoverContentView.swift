@@ -419,7 +419,7 @@ struct SmartHeader: View {
 
                 VStack(alignment: .leading, spacing: 4) {
                     if isMultiProfileMode, let profile = clickedProfile {
-                        // Multi-profile mode: show clicked profile name + activate button
+                        // Multi-profile mode: show clicked profile name with active indicator
                         HStack(spacing: 6) {
                             Text(profile.name)
                                 .font(.system(size: 13, weight: .semibold))
@@ -427,25 +427,9 @@ struct SmartHeader: View {
                                 .lineLimit(1)
 
                             if profile.id == profileManager.activeProfile?.id {
-                                // Active indicator
                                 Circle()
                                     .fill(Color.accentColor)
                                     .frame(width: 5, height: 5)
-                            } else {
-                                // Activate button for non-active profiles
-                                Button(action: {
-                                    Task {
-                                        await profileManager.activateProfile(profile.id)
-                                    }
-                                }) {
-                                    Text("Aktivieren")
-                                        .font(.system(size: 9, weight: .medium))
-                                        .foregroundColor(.accentColor)
-                                        .padding(.horizontal, 5)
-                                        .padding(.vertical, 2)
-                                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
-                                }
-                                .buttonStyle(.plain)
                             }
                         }
                         .padding(.horizontal, 7)
