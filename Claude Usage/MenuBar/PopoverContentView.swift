@@ -418,8 +418,42 @@ struct SmartHeader: View {
                 }
 
                 VStack(alignment: .leading, spacing: 4) {
-                    // Profile Switcher (always shown)
-                    ProfileSwitcherCompact(onManageProfiles: onManageProfiles)
+                    if isMultiProfileMode, let profile = clickedProfile {
+                        // Multi-profile mode: show clicked profile name + activate button
+                        HStack(spacing: 6) {
+                            Text(profile.name)
+                                .font(.system(size: 13, weight: .semibold))
+                                .foregroundColor(.primary)
+                                .lineLimit(1)
+
+                            if profile.id == profileManager.activeProfile?.id {
+                                // Active indicator
+                                Circle()
+                                    .fill(Color.accentColor)
+                                    .frame(width: 5, height: 5)
+                            } else {
+                                // Activate button for non-active profiles
+                                Button(action: {
+                                    Task {
+                                        await profileManager.activateProfile(profile.id)
+                                    }
+                                }) {
+                                    Text("Aktivieren")
+                                        .font(.system(size: 9, weight: .medium))
+                                        .foregroundColor(.accentColor)
+                                        .padding(.horizontal, 5)
+                                        .padding(.vertical, 2)
+                                        .background(Capsule().fill(Color.accentColor.opacity(0.12)))
+                                }
+                                .buttonStyle(.plain)
+                            }
+                        }
+                        .padding(.horizontal, 7)
+                        .padding(.vertical, 3)
+                    } else {
+                        // Single-profile mode: full profile switcher dropdown
+                        ProfileSwitcherCompact(onManageProfiles: onManageProfiles)
+                    }
 
                     // Claude Status Badge
                     Button(action: {
