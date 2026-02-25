@@ -6,6 +6,7 @@
 import XCTest
 @testable import Claude_Usage
 
+@MainActor
 class AutoStartSessionServiceTests: XCTestCase {
 
     // Test: HTTP 404 response during delete should be logged, not silently ignored
