@@ -5,6 +5,18 @@ All notable changes to Claude Usage Tracker will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-02-25
+
+### Fixed
+- **#145** - CLI credentials not recognized when Claude Code appends a hash suffix to the keychain service name (e.g. `Claude Code-credentials-0f61c92a`)
+- **#136** - Initialization conversation deletion failures are now logged with conversation UUID; 5-hour fallback reset time prevents duplicate auto-starts when API response format changes
+- **#139** - Usage data from previous days no longer shown on app start; stale cache cleared on day boundary via `ClaudeUsage.isStale()`
+- **#146** - Statusline now refreshes on every profile switch (not only when switching to Claude.ai credential profiles)
+
+### Notes
+This is a community patch release maintained by the fork at https://github.com/jaywee92/Claude-Usage-Tracker.
+Original project: https://github.com/hamed-elfayome/Claude-Usage-Tracker
+
 ## [2.3.0] - 2026-01-23
 
 ### Major Release - Multi-Profile Menu Bar Display & Enhanced UI
