@@ -95,10 +95,17 @@ final class OAuthService {
             throw OAuthError.invalidURL
         }
 
+        // OAuth 2.0 token endpoints require application/x-www-form-urlencoded (not JSON)
+        var components = URLComponents()
+        components.queryItems = body.map { URLQueryItem(name: $0.key, value: $0.value) }
+        guard let formBody = components.query?.data(using: .utf8) else {
+            throw OAuthError.tokenExchangeFailed
+        }
+
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONEncoder().encode(body)
+        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
+        request.httpBody = formBody
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
