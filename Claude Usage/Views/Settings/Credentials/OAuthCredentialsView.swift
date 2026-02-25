@@ -27,7 +27,6 @@ struct OAuthCredentialsView: View {
 
     private var profile: Profile? {
         profileManager.profiles.first { $0.id == profileId }
-            ?? profileManager.activeProfile
     }
 
     private var oauthCreds: OAuthCredentials? {
@@ -41,6 +40,11 @@ struct OAuthCredentialsView: View {
                     .foregroundColor(.accentColor)
                 Text("Claude.ai OAuth")
                     .font(.headline)
+                if let name = profile?.name {
+                    Text("· \(name)")
+                        .font(.headline)
+                        .foregroundColor(.secondary)
+                }
             }
 
             if oauthCreds != nil {
@@ -122,7 +126,13 @@ struct OAuthCredentialsView: View {
 
     private var codeInputView: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Claude.ai wurde im Browser geöffnet. Melde dich an und kopiere den angezeigten Code:")
+            if let name = profile?.name {
+                Text("Profil: \(name)")
+                    .font(.caption)
+                    .foregroundColor(.accentColor)
+                    .fontWeight(.medium)
+            }
+            Text("Claude.ai wurde im Browser geöffnet. Melde dich mit dem richtigen Account an und kopiere den angezeigten Code:")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
