@@ -162,13 +162,13 @@ final class OAuthService: NSObject {
 // MARK: - ASWebAuthenticationPresentationContextProviding
 
 extension OAuthService: ASWebAuthenticationPresentationContextProviding {
-    nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // MainActor access is safe here: ASWebAuthenticationSession calls this on the main thread
-        DispatchQueue.main.sync {
-            NSApplication.shared.windows.first(where: { $0.isKeyWindow })
-                ?? NSApplication.shared.windows.first
-                ?? NSWindow()
-        }
+    // ASWebAuthenticationSession always calls presentationAnchor on the main thread,
+    // so @MainActor is safe here even though the protocol requires nonisolated.
+    @MainActor
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        NSApplication.shared.windows.first(where: { $0.isKeyWindow })
+            ?? NSApplication.shared.windows.first
+            ?? NSWindow()
     }
 }
 
