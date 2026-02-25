@@ -107,6 +107,9 @@ final class OAuthService {
         request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
         request.httpBody = formBody
 
+        LoggingService.shared.log("OAuth POST \(url.absoluteString)")
+        LoggingService.shared.log("OAuth body: \(String(data: formBody, encoding: .utf8) ?? "(nil)")")
+
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
