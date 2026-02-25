@@ -35,6 +35,10 @@ struct SettingsView: View {
                     APIBillingView()
                 case .cliAccount:
                     CLIAccountView()
+                case .oauthLogin:
+                    if let profileId = profileManager.activeProfile?.id {
+                        OAuthCredentialsView(profileId: profileId)
+                    }
 
                 // Profile Settings
                 case .appearance:
@@ -196,6 +200,7 @@ enum SettingsSection: String, CaseIterable {
     case claudeAI
     case apiConsole
     case cliAccount
+    case oauthLogin
 
     // Profile Settings
     case appearance
@@ -213,6 +218,7 @@ enum SettingsSection: String, CaseIterable {
         case .claudeAI: return "section.claudeai_title".localized
         case .apiConsole: return "section.api_console_title".localized
         case .cliAccount: return "section.cli_account_title".localized
+        case .oauthLogin: return "Claude.ai OAuth"
         case .appearance: return "section.appearance_title".localized
         case .general: return "section.general_title".localized
         case .manageProfiles: return "section.manage_profiles_title".localized
@@ -228,6 +234,7 @@ enum SettingsSection: String, CaseIterable {
         case .claudeAI: return "key.fill"
         case .apiConsole: return "dollarsign.circle.fill"
         case .cliAccount: return "terminal.fill"
+        case .oauthLogin: return "lock.shield"
         case .appearance: return "paintbrush.fill"
         case .general: return "gearshape.fill"
         case .manageProfiles: return "person.2.fill"
@@ -243,6 +250,7 @@ enum SettingsSection: String, CaseIterable {
         case .claudeAI: return "section.claudeai_desc".localized
         case .apiConsole: return "section.api_console_desc".localized
         case .cliAccount: return "section.cli_account_desc".localized
+        case .oauthLogin: return "OAuth Login mit Claude.ai"
         case .appearance: return "section.appearance_desc".localized
         case .general: return "section.general_desc".localized
         case .manageProfiles: return "section.manage_profiles_desc".localized
@@ -255,7 +263,7 @@ enum SettingsSection: String, CaseIterable {
 
     var isCredential: Bool {
         switch self {
-        case .claudeAI, .apiConsole, .cliAccount:
+        case .claudeAI, .apiConsole, .cliAccount, .oauthLogin:
             return true
         default:
             return false
@@ -354,6 +362,19 @@ struct ProfileCredentialCardsRow: View {
                     title: "CLI Account",
                     isConnected: profileManager.activeProfile?.hasCliAccount ?? false,
                     isSelected: selectedSection == .cliAccount
+                )
+            }
+            .buttonStyle(.plain)
+
+            // OAuth Card
+            Button {
+                selectedSection = .oauthLogin
+            } label: {
+                CredentialMiniCard(
+                    icon: "lock.shield",
+                    title: "OAuth",
+                    isConnected: profileManager.activeProfile?.hasOAuthCredentials ?? false,
+                    isSelected: selectedSection == .oauthLogin
                 )
             }
             .buttonStyle(.plain)
