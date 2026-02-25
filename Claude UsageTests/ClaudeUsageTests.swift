@@ -1,6 +1,7 @@
 import XCTest
 @testable import Claude_Usage
 
+@MainActor
 final class ClaudeUsageTests: XCTestCase {
 
     // MARK: - Status Level Tests (Deprecated Property - uses remaining-based thresholds)

@@ -1,6 +1,7 @@
 import XCTest
 @testable import Claude_Usage
 
+@MainActor
 final class UsageStatusCalculatorTests: XCTestCase {
 
     // MARK: - Used-Based Thresholds (showRemaining = false)
