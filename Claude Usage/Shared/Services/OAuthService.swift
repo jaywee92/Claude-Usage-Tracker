@@ -14,10 +14,14 @@ final class OAuthService: NSObject {
 
     private enum OAuth {
         static let clientId     = "9d1c250a-e61b-44d9-88ed-5944d1962f5e"
-        static let redirectURI  = "claudeusage://oauth/callback"
+        // The Claude.ai OAuth server only accepts this HTTPS redirect URI (same as Claude Code CLI)
+        static let redirectURI  = "https://platform.claude.com/oauth/code/callback"
         static let authURL      = "https://claude.ai/oauth/authorize"
-        static let tokenURL     = "https://claude.ai/v1/oauth/token"
+        static let tokenURL     = "https://platform.claude.com/v1/oauth/token"
         static let scopes       = "user:inference user:profile"
+        // ASWebAuthenticationSession intercepts the redirect when the URL contains this path prefix
+        static let callbackHost = "platform.claude.com"
+        static let callbackPath = "/oauth/code/"
     }
 
     // MARK: - Public API
@@ -46,10 +50,12 @@ final class OAuthService: NSObject {
         }
 
         // 3. Show browser sheet and wait for callback
+        // ASWebAuthenticationSession with callbackURLScheme "https" intercepts any HTTPS redirect.
+        // The Claude.ai OAuth server redirects to https://platform.claude.com/oauth/code/callback?code=...
         let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
             let session = ASWebAuthenticationSession(
                 url: authURL,
-                callbackURLScheme: "claudeusage"
+                callbackURLScheme: "https"
             ) { url, error in
                 if let error = error {
                     continuation.resume(throwing: error)
@@ -68,11 +74,18 @@ final class OAuthService: NSObject {
 
         activeSession = nil
 
-        // 4. Validate state and extract code
+        // 4. Validate callback host/path and extract code
+        // Accept both /oauth/code/callback?code=... and /oauth/code/success?code=...
         guard let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-              let returnedState = callbackComponents.queryItems?.first(where: { $0.name == "state" })?.value,
-              returnedState == state,
+              callbackComponents.host == OAuth.callbackHost,
+              let path = callbackComponents.path as String?,
+              path.hasPrefix(OAuth.callbackPath),
               let code = callbackComponents.queryItems?.first(where: { $0.name == "code" })?.value else {
+            throw OAuthError.invalidCallback
+        }
+        // Validate state if present (may be absent on success page)
+        if let returnedState = callbackComponents.queryItems?.first(where: { $0.name == "state" })?.value,
+           returnedState != state {
             throw OAuthError.invalidCallback
         }
 
