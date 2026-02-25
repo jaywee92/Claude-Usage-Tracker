@@ -55,6 +55,13 @@ struct ClaudeUsage: Codable, Equatable {
         }
     }
 
+    /// Returns true if the usage data is from a previous calendar day or is nil.
+    /// Used to detect when cached data should be discarded in favour of a fresh API fetch.
+    static func isStale(_ usage: ClaudeUsage?) -> Bool {
+        guard let usage = usage else { return true }
+        return !Calendar.current.isDateInToday(usage.lastUpdated)
+    }
+
     /// Empty usage data (used when no data is available)
     static var empty: ClaudeUsage {
         ClaudeUsage(
