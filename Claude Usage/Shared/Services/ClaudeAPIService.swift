@@ -73,7 +73,7 @@ class ClaudeAPIService: APIServiceProtocol {
     /// Gets the best available authentication method with fallback support
     /// Priority: 1) claude.ai session → 2) saved CLI OAuth → 3) system Keychain CLI OAuth
     /// Note: Console API session is NOT used as fallback (it only provides billing data, not usage)
-    private func getAuthentication() throws -> AuthenticationType {
+    private func getAuthentication() async throws -> AuthenticationType {
         guard let activeProfile = ProfileManager.shared.activeProfile else {
             LoggingService.shared.logError("ClaudeAPIService.getAuthentication: No active profile")
             throw AppError.sessionKeyNotFound()
@@ -87,6 +87,29 @@ class ClaudeAPIService: APIServiceProtocol {
                 return .claudeAISession(validatedKey)
             } catch {
                 LoggingService.shared.logError("ClaudeAPIService: claude.ai session key validation failed: \(error.localizedDescription)")
+            }
+        }
+
+        // Priority 2: OAuth credentials (with auto-refresh)
+        if var oauthCreds = activeProfile.oauthCredentials {
+            if oauthCreds.expiresInFiveMinutes {
+                do {
+                    let refreshed = try await OAuthService().refreshToken(oauthCreds)
+                    oauthCreds = refreshed
+                    var profiles = ProfileStore.shared.loadProfiles()
+                    if let idx = profiles.firstIndex(where: { $0.id == activeProfile.id }) {
+                        profiles[idx].oauthCredentials = refreshed
+                        ProfileStore.shared.saveProfiles(profiles)
+                        await MainActor.run {
+                            ProfileManager.shared.updateProfile(profiles[idx])
+                        }
+                    }
+                } catch {
+                    LoggingService.shared.log("OAuth auto-refresh failed: \(error.localizedDescription)")
+                }
+            }
+            if !oauthCreds.isExpired {
+                return .cliOAuth(oauthCreds.accessToken)
             }
         }
 
@@ -379,7 +402,7 @@ class ClaudeAPIService: APIServiceProtocol {
 
     /// Fetches real usage data from Claude's API
     func fetchUsageData() async throws -> ClaudeUsage {
-        let auth = try getAuthentication()
+        let auth = try await getAuthentication()
 
         switch auth {
         case .claudeAISession(let sessionKey):
