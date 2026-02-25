@@ -6,6 +6,7 @@ final class ClaudeUsageTests: XCTestCase {
 
     // MARK: - Status Level Tests (Deprecated Property - uses remaining-based thresholds)
 
+    @available(*, deprecated)
     func testStatusLevelSafe() {
         // statusLevel uses remaining-based thresholds: safe when remaining >= 20%
         let usage = createUsage(sessionPercentage: 0)  // 100% remaining
@@ -15,9 +16,10 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(usage25.statusLevel, .safe)
 
         let usage80 = createUsage(sessionPercentage: 80)  // 20% remaining (exact boundary)
-        XCTAssertEqual(usage.statusLevel, .safe)
+        XCTAssertEqual(usage80.statusLevel, .safe)
     }
 
+    @available(*, deprecated)
     func testStatusLevelModerate() {
         // statusLevel uses remaining-based thresholds: moderate when 10% <= remaining < 20%
         let usage81 = createUsage(sessionPercentage: 81)  // 19% remaining
@@ -30,6 +32,7 @@ final class ClaudeUsageTests: XCTestCase {
         XCTAssertEqual(usage90.statusLevel, .moderate)
     }
 
+    @available(*, deprecated)
     func testStatusLevelCritical() {
         // statusLevel uses remaining-based thresholds: critical when remaining < 10%
         let usage91 = createUsage(sessionPercentage: 91)  // 9% remaining
@@ -44,6 +47,7 @@ final class ClaudeUsageTests: XCTestCase {
 
     // MARK: - Empty Usage Tests
 
+    @available(*, deprecated)
     func testEmptyUsage() {
         let empty = ClaudeUsage.empty
 
