@@ -58,6 +58,54 @@ class ClaudeCodeSyncServiceTests: XCTestCase {
         XCTAssertNil(serviceName, "Should return nil when no Claude Code credentials found")
     }
 
+    // MARK: - isTokenExpired / extractTokenExpiry Tests
+
+    private func makeCredentialsJSON(expiresAt: Double) -> String {
+        """
+        {"claudeAiOauth":{"accessToken":"tok","refreshToken":"ref","expiresAt":\(expiresAt),"tokenType":"Bearer","subscriptionType":"claude_pro","scopes":[]}}
+        """
+    }
+
+    // Test: millisecond timestamp (Claude CLI format) that is expired
+    func testIsTokenExpired_MillisecondsExpired() {
+        let service = ClaudeCodeSyncService.shared
+        // 1 day ago in milliseconds
+        let expiredMs = (Date().timeIntervalSince1970 - 86400) * 1000
+        let json = makeCredentialsJSON(expiresAt: expiredMs)
+        XCTAssertTrue(service.isTokenExpired(json),
+                      "Token with ms expiry in the past should be expired")
+    }
+
+    // Test: millisecond timestamp that is NOT yet expired
+    func testIsTokenExpired_MillisecondsValid() {
+        let service = ClaudeCodeSyncService.shared
+        // 1 hour from now in milliseconds
+        let futureMs = (Date().timeIntervalSince1970 + 3600) * 1000
+        let json = makeCredentialsJSON(expiresAt: futureMs)
+        XCTAssertFalse(service.isTokenExpired(json),
+                       "Token with ms expiry in the future should NOT be expired")
+    }
+
+    // Test: second timestamp (legacy format) that is expired
+    func testIsTokenExpired_SecondsExpired() {
+        let service = ClaudeCodeSyncService.shared
+        // 1 day ago in seconds
+        let expiredSec = Date().timeIntervalSince1970 - 86400
+        let json = makeCredentialsJSON(expiresAt: expiredSec)
+        XCTAssertTrue(service.isTokenExpired(json),
+                      "Token with second expiry in the past should be expired")
+    }
+
+    // Test: missing expiresAt field → assume valid (returns false)
+    func testIsTokenExpired_MissingExpiry() {
+        let service = ClaudeCodeSyncService.shared
+        let json = """
+        {"claudeAiOauth":{"accessToken":"tok","tokenType":"Bearer"}}
+        """
+        XCTAssertFalse(service.isTokenExpired(json),
+                       "Token with no expiry field should be assumed valid")
+    }
+
     // Test: extractServiceName handles multi-line output with multiple entries
     func testExtractServiceNameFromMultipleEntries() {
         let service = ClaudeCodeSyncService.shared

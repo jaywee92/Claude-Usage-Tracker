@@ -269,7 +269,11 @@ class ClaudeCodeSyncService {
               let expiresAt = oauth["expiresAt"] as? TimeInterval else {
             return nil
         }
-        return Date(timeIntervalSince1970: expiresAt)
+        // Claude Code CLI stores expiresAt in milliseconds since epoch.
+        // Values > 1e12 are milliseconds (current time in ms is ~1.74e12);
+        // values < 1e12 are seconds. Convert accordingly.
+        let seconds = expiresAt > 1_000_000_000_000 ? expiresAt / 1000.0 : expiresAt
+        return Date(timeIntervalSince1970: seconds)
     }
 
     /// Checks if the OAuth token in the credentials JSON is expired
