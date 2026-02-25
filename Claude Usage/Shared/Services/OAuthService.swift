@@ -163,11 +163,12 @@ final class OAuthService: NSObject {
 
 extension OAuthService: ASWebAuthenticationPresentationContextProviding {
     nonisolated func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        // Return key window for sheet presentation
-        if let keyWindow = NSApplication.shared.windows.first(where: { $0.isKeyWindow }) {
-            return keyWindow
+        // MainActor access is safe here: ASWebAuthenticationSession calls this on the main thread
+        DispatchQueue.main.sync {
+            NSApplication.shared.windows.first(where: { $0.isKeyWindow })
+                ?? NSApplication.shared.windows.first
+                ?? NSWindow()
         }
-        return NSApplication.shared.windows.first ?? NSWindow()
     }
 }
 
