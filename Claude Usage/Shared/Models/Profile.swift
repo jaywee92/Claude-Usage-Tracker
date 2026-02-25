@@ -19,6 +19,7 @@ struct Profile: Codable, Identifiable, Equatable {
     var apiSessionKey: String?
     var apiOrganizationId: String?
     var cliCredentialsJSON: String?
+    var oauthCredentials: OAuthCredentials?
 
     // MARK: - CLI Account Sync Metadata
     var hasCliAccount: Bool
@@ -93,13 +94,15 @@ struct Profile: Codable, Identifiable, Equatable {
         claudeSessionKey != nil && organizationId != nil
     }
 
+    var hasOAuthCredentials: Bool { oauthCredentials != nil }
+
     var hasAPIConsole: Bool {
         apiSessionKey != nil && apiOrganizationId != nil
     }
 
     /// True if profile has credentials that can fetch usage data (Claude.ai, CLI OAuth, or API Console)
     var hasUsageCredentials: Bool {
-        hasClaudeAI || hasAPIConsole || hasValidCLIOAuth || hasValidSystemCLIOAuth
+        hasClaudeAI || hasAPIConsole || hasValidCLIOAuth || hasValidSystemCLIOAuth || hasOAuthCredentials
     }
 
     /// True if profile has CLI OAuth credentials that are not expired
