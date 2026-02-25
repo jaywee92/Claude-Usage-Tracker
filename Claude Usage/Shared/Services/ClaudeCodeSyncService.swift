@@ -12,7 +12,79 @@ import Security
 class ClaudeCodeSyncService {
     static let shared = ClaudeCodeSyncService()
 
+    /// Cache for discovered service name (avoids repeated subprocess calls)
+    private var cachedServiceName: String?
+
     private init() {}
+
+    // MARK: - Service Name Discovery
+
+    /// Extracts the Claude Code keychain service name from verbose security output.
+    /// Claude Code CLI may use a hash suffix (e.g. "Claude Code-credentials-0f61c92a").
+    /// - Parameter keychainOutput: Raw output from `security find-generic-password -v`
+    /// - Returns: The matched service name, or nil if not found
+    func extractServiceName(from keychainOutput: String) -> String? {
+        // Match "svce" blob value that starts with "Claude Code-credentials"
+        let pattern = #""svce"<blob>="(Claude Code-credentials[^"]*)""#
+        guard let regex = try? NSRegularExpression(pattern: pattern),
+              let match = regex.firstMatch(
+                  in: keychainOutput,
+                  range: NSRange(keychainOutput.startIndex..., in: keychainOutput)
+              ),
+              let range = Range(match.range(at: 1), in: keychainOutput)
+        else {
+            return nil
+        }
+        return String(keychainOutput[range])
+    }
+
+    /// Finds the actual keychain service name for Claude Code credentials.
+    /// Handles both the standard name "Claude Code-credentials" and
+    /// hash-suffixed variants like "Claude Code-credentials-0f61c92a".
+    /// Result is cached after first successful discovery.
+    private func findClaudeCodeServiceName() -> String {
+        // Return cached value if already discovered
+        if let cached = cachedServiceName {
+            return cached
+        }
+
+        // Use verbose search on the security parent command to get metadata
+        // Correct invocation: security -v find-generic-password -s "..." -a "..."
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        process.arguments = [
+            "-v",                             // verbose flag on the parent command
+            "find-generic-password",
+            "-s", "Claude Code-credentials",  // seed search; finds prefix matches
+            "-a", NSUserName()
+        ]
+
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+
+        do {
+            try process.run()
+            process.waitUntilExit()
+
+            // security -v writes attributes to stderr, password to stdout
+            let stdout = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let stderr = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let combined = stdout + stderr
+
+            if let discovered = extractServiceName(from: combined) {
+                LoggingService.shared.log("Discovered keychain service name: \(discovered)")
+                cachedServiceName = discovered
+                return discovered
+            }
+        } catch {
+            LoggingService.shared.log("findClaudeCodeServiceName: process error - \(error.localizedDescription)")
+        }
+
+        // Fallback to standard name (for older Claude CLI versions without hash)
+        return "Claude Code-credentials"
+    }
 
     // MARK: - System Keychain Access
 
@@ -22,7 +94,7 @@ class ClaudeCodeSyncService {
         process.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         process.arguments = [
             "find-generic-password",
-            "-s", "Claude Code-credentials",
+            "-s", findClaudeCodeServiceName(),
             "-a", NSUserName(),
             "-w"  // Print password only
         ]
@@ -63,7 +135,7 @@ class ClaudeCodeSyncService {
         deleteProcess.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         deleteProcess.arguments = [
             "delete-generic-password",
-            "-s", "Claude Code-credentials",
+            "-s", findClaudeCodeServiceName(),
             "-a", NSUserName()
         ]
 
@@ -82,7 +154,7 @@ class ClaudeCodeSyncService {
         addProcess.executableURL = URL(fileURLWithPath: "/usr/bin/security")
         addProcess.arguments = [
             "add-generic-password",
-            "-s", "Claude Code-credentials",
+            "-s", findClaudeCodeServiceName(),
             "-a", NSUserName(),
             "-w", jsonData,
             "-U"  // Update if exists
