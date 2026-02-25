@@ -4,11 +4,10 @@
 //
 
 import Foundation
-import AuthenticationServices
 import CryptoKit
 
 @MainActor
-final class OAuthService: NSObject {
+final class OAuthService {
 
     // MARK: - Constants
 
@@ -19,22 +18,18 @@ final class OAuthService: NSObject {
         static let authURL      = "https://claude.ai/oauth/authorize"
         static let tokenURL     = "https://platform.claude.com/v1/oauth/token"
         static let scopes       = "user:inference user:profile"
-        // ASWebAuthenticationSession intercepts the redirect when the URL contains this path prefix
-        static let callbackHost = "platform.claude.com"
-        static let callbackPath = "/oauth/code/"
     }
 
     // MARK: - Public API
 
-    /// Starts the OAuth login flow. Presents a browser sheet and returns OAuthCredentials on success.
-    /// Call from the settings UI when the user taps "Mit Claude.ai verbinden".
-    func startLogin(presentationAnchor: ASPresentationAnchor) async throws -> OAuthCredentials {
-        // 1. Generate PKCE
+    /// Step 1: Build the authorization URL and generate PKCE verifier.
+    /// Open this URL in the browser. The server shows a code the user must copy.
+    /// - Returns: (authorizationURL, pkceVerifier) — store the verifier for step 2.
+    func buildAuthorizationURL() throws -> (url: URL, verifier: String) {
         let verifier = generateCodeVerifier()
         let challenge = generateCodeChallenge(from: verifier)
         let state = UUID().uuidString
 
-        // 2. Build auth URL
         var components = URLComponents(string: OAuth.authURL)!
         components.queryItems = [
             .init(name: "client_id",             value: OAuth.clientId),
@@ -48,49 +43,30 @@ final class OAuthService: NSObject {
         guard let authURL = components.url else {
             throw OAuthError.invalidURL
         }
+        return (authURL, verifier)
+    }
 
-        // 3. Show browser sheet and wait for callback
-        // ASWebAuthenticationSession with callbackURLScheme "https" intercepts any HTTPS redirect.
-        // The Claude.ai OAuth server redirects to https://platform.claude.com/oauth/code/callback?code=...
-        let callbackURL: URL = try await withCheckedThrowingContinuation { continuation in
-            let session = ASWebAuthenticationSession(
-                url: authURL,
-                callbackURLScheme: "https"
-            ) { url, error in
-                if let error = error {
-                    continuation.resume(throwing: error)
-                } else if let url = url {
-                    continuation.resume(returning: url)
-                } else {
-                    continuation.resume(throwing: OAuthError.noCallbackURL)
-                }
-            }
-            session.presentationContextProvider = self
-            session.prefersEphemeralWebBrowserSession = false
-            session.start()
-            // Keep session alive during await — store reference
-            self.activeSession = session
-        }
+    /// Step 2: Exchange the authorization code (copied by user) for tokens.
+    /// - Parameters:
+    ///   - code: The code displayed on the claude.ai page after login.
+    ///   - verifier: The PKCE verifier returned by buildAuthorizationURL().
+    func exchangeCode(_ code: String, verifier: String) async throws -> OAuthCredentials {
+        let body: [String: String] = [
+            "grant_type":    "authorization_code",
+            "code":          code.trimmingCharacters(in: .whitespacesAndNewlines),
+            "redirect_uri":  OAuth.redirectURI,
+            "client_id":     OAuth.clientId,
+            "code_verifier": verifier,
+        ]
 
-        activeSession = nil
+        let response = try await postTokenRequest(body: body)
 
-        // 4. Validate callback host/path and extract code
-        // Accept both /oauth/code/callback?code=... and /oauth/code/success?code=...
-        guard let callbackComponents = URLComponents(url: callbackURL, resolvingAgainstBaseURL: false),
-              callbackComponents.host == OAuth.callbackHost,
-              let path = callbackComponents.path as String?,
-              path.hasPrefix(OAuth.callbackPath),
-              let code = callbackComponents.queryItems?.first(where: { $0.name == "code" })?.value else {
-            throw OAuthError.invalidCallback
-        }
-        // Validate state if present (may be absent on success page)
-        if let returnedState = callbackComponents.queryItems?.first(where: { $0.name == "state" })?.value,
-           returnedState != state {
-            throw OAuthError.invalidCallback
-        }
-
-        // 5. Exchange code for tokens
-        return try await exchangeCode(code, verifier: verifier)
+        return OAuthCredentials(
+            accessToken: response.accessToken,
+            refreshToken: response.refreshToken ?? "",
+            expiresAt: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
+            email: nil
+        )
     }
 
     /// Refreshes the access token using the stored refresh token.
@@ -113,27 +89,6 @@ final class OAuthService: NSObject {
     }
 
     // MARK: - Private Helpers
-
-    private var activeSession: ASWebAuthenticationSession?
-
-    private func exchangeCode(_ code: String, verifier: String) async throws -> OAuthCredentials {
-        let body: [String: String] = [
-            "grant_type":    "authorization_code",
-            "code":          code,
-            "redirect_uri":  OAuth.redirectURI,
-            "client_id":     OAuth.clientId,
-            "code_verifier": verifier,
-        ]
-
-        let response = try await postTokenRequest(body: body)
-
-        return OAuthCredentials(
-            accessToken: response.accessToken,
-            refreshToken: response.refreshToken ?? "",
-            expiresAt: Date().addingTimeInterval(TimeInterval(response.expiresIn)),
-            email: nil
-        )
-    }
 
     private func postTokenRequest(body: [String: String]) async throws -> TokenResponse {
         guard let url = URL(string: OAuth.tokenURL) else {
@@ -169,19 +124,6 @@ final class OAuthService: NSObject {
         let data = Data(verifier.utf8)
         let hashed = SHA256.hash(data: data)
         return Data(hashed).base64URLEncodedString()
-    }
-}
-
-// MARK: - ASWebAuthenticationPresentationContextProviding
-
-extension OAuthService: ASWebAuthenticationPresentationContextProviding {
-    // ASWebAuthenticationSession always calls presentationAnchor on the main thread,
-    // so @MainActor is safe here even though the protocol requires nonisolated.
-    @MainActor
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
-        NSApplication.shared.windows.first(where: { $0.isKeyWindow })
-            ?? NSApplication.shared.windows.first
-            ?? NSWindow()
     }
 }
 

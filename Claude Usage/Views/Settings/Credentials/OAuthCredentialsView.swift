@@ -10,7 +10,19 @@ struct OAuthCredentialsView: View {
     let profileId: UUID
 
     @StateObject private var profileManager = ProfileManager.shared
-    @State private var isConnecting = false
+
+    // Flow state
+    private enum FlowStep {
+        case idle           // Not connected, show "Connect" button
+        case waitingForCode // Browser opened, waiting for user to paste code
+        case exchanging     // Exchanging code for token
+        case connected      // Successfully connected
+    }
+
+    @State private var step: FlowStep = .idle
+    @State private var authURL: URL?
+    @State private var pkceVerifier: String?
+    @State private var codeInput: String = ""
     @State private var errorMessage: String?
 
     private var profile: Profile? {
@@ -31,10 +43,30 @@ struct OAuthCredentialsView: View {
                     .font(.headline)
             }
 
-            if let creds = oauthCreds {
-                connectedView(creds: creds)
+            if oauthCreds != nil {
+                connectedView
             } else {
-                notConnectedView
+                switch step {
+                case .idle:
+                    notConnectedView
+                case .waitingForCode:
+                    codeInputView
+                case .exchanging:
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Token wird ausgetauscht...")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                case .connected:
+                    // Will flip to connectedView once profile reloads
+                    HStack(spacing: 8) {
+                        ProgressView().scaleEffect(0.7)
+                        Text("Verbunden")
+                            .font(.subheadline)
+                            .foregroundColor(.secondary)
+                    }
+                }
             }
 
             if let error = errorMessage {
@@ -50,21 +82,15 @@ struct OAuthCredentialsView: View {
 
     // MARK: - Connected View
 
-    private func connectedView(creds: OAuthCredentials) -> some View {
+    private var connectedView: some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack(spacing: 6) {
                 Circle()
                     .fill(Color.green)
                     .frame(width: 8, height: 8)
-                if let email = creds.email {
-                    Text("Verbunden als \(email)")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                } else {
-                    Text("Verbunden")
-                        .font(.subheadline)
-                        .foregroundColor(.secondary)
-                }
+                Text("Verbunden")
+                    .font(.subheadline)
+                    .foregroundColor(.secondary)
             }
 
             Button("Verbindung trennen") {
@@ -79,50 +105,94 @@ struct OAuthCredentialsView: View {
 
     private var notConnectedView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Kein manueller Session-Key nötig")
+            Text("Einmalig mit Claude.ai verbinden — kein manueller Session-Key nötig.")
                 .font(.subheadline)
                 .foregroundColor(.secondary)
 
             Button {
-                Task { await connect() }
+                openBrowser()
             } label: {
-                if isConnecting {
-                    HStack(spacing: 6) {
-                        ProgressView().scaleEffect(0.7)
-                        Text("Verbinde...")
-                    }
-                } else {
-                    Label("Mit Claude.ai verbinden", systemImage: "arrow.right.circle")
-                }
+                Label("Mit Claude.ai verbinden", systemImage: "arrow.right.circle")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(isConnecting)
+        }
+    }
+
+    // MARK: - Code Input View (step 2)
+
+    private var codeInputView: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Claude.ai wurde im Browser geöffnet. Melde dich an und kopiere den angezeigten Code:")
+                .font(.subheadline)
+                .foregroundColor(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                TextField("Code einfügen", text: $codeInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(.body, design: .monospaced))
+
+                Button("Bestätigen") {
+                    Task { await submitCode() }
+                }
+                .buttonStyle(.borderedProminent)
+                .disabled(codeInput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            }
+
+            HStack(spacing: 12) {
+                Button("Browser erneut öffnen") {
+                    openBrowser()
+                }
+                .buttonStyle(.bordered)
+                .font(.caption)
+
+                Button("Abbrechen") {
+                    step = .idle
+                    codeInput = ""
+                    errorMessage = nil
+                }
+                .buttonStyle(.plain)
+                .foregroundColor(.secondary)
+                .font(.caption)
+            }
         }
     }
 
     // MARK: - Actions
 
-    @MainActor
-    private func connect() async {
-        isConnecting = true
+    private func openBrowser() {
         errorMessage = nil
+        codeInput = ""
 
         do {
-            guard let window = NSApplication.shared.windows.first(where: { $0.isKeyWindow })
-                               ?? NSApplication.shared.windows.first else {
-                errorMessage = "Kein aktives Fenster gefunden."
-                isConnecting = false
-                return
-            }
-            let credentials = try await OAuthService().startLogin(presentationAnchor: window)
-            saveCredentials(credentials)
-        } catch ASWebAuthenticationSessionError.canceledLogin {
-            // User cancelled — no error shown
+            let (url, verifier) = try OAuthService().buildAuthorizationURL()
+            authURL = url
+            pkceVerifier = verifier
+            step = .waitingForCode
+            NSWorkspace.shared.open(url)
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
 
-        isConnecting = false
+    @MainActor
+    private func submitCode() async {
+        guard let verifier = pkceVerifier else { return }
+        let code = codeInput.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !code.isEmpty else { return }
+
+        step = .exchanging
+        errorMessage = nil
+
+        do {
+            let credentials = try await OAuthService().exchangeCode(code, verifier: verifier)
+            saveCredentials(credentials)
+            step = .connected
+            codeInput = ""
+        } catch {
+            errorMessage = error.localizedDescription
+            step = .waitingForCode
+        }
     }
 
     private func disconnect() {
@@ -131,6 +201,7 @@ struct OAuthCredentialsView: View {
         profiles[index].oauthCredentials = nil
         ProfileStore.shared.saveProfiles(profiles)
         ProfileManager.shared.updateProfile(profiles[index])
+        step = .idle
     }
 
     private func saveCredentials(_ creds: OAuthCredentials) {
