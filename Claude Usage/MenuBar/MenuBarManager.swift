@@ -715,6 +715,11 @@ class MenuBarManager: NSObject, ObservableObject {
 
     /// Refreshes usage data for all profiles selected for multi-profile display
     private func refreshAllSelectedProfiles() {
+        guard !isRefreshing else {
+            LoggingService.shared.log("MenuBarManager: Skipping multi-profile refresh — already in progress")
+            return
+        }
+
         let selectedProfiles = profileManager.profiles.filter { $0.isSelectedForDisplay && $0.hasUsageCredentials }
 
         guard !selectedProfiles.isEmpty else {
