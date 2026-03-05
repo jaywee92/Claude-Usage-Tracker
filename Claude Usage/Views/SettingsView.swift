@@ -5,6 +5,7 @@ import UserNotifications
 struct SettingsView: View {
     @State private var selectedSection: SettingsSection = .appearance
     @StateObject private var profileManager = ProfileManager.shared
+    var menuBarManager: MenuBarManager? = nil
 
     var body: some View {
         HSplitView {
@@ -36,8 +37,19 @@ struct SettingsView: View {
                 case .cliAccount:
                     CLIAccountView()
                 case .oauthLogin:
-                    if let profileId = profileManager.activeProfile?.id {
-                        OAuthCredentialsView(profileId: profileId)
+                    if let profileId = profileManager.activeProfile?.id,
+                       let manager = menuBarManager {
+                        ScrollView {
+                            VStack(alignment: .leading, spacing: DesignTokens.Spacing.section) {
+                                SettingsPageHeader(
+                                    title: "Claude.ai OAuth",
+                                    subtitle: "Mit Claude.ai verbinden — kein manueller Session-Key nötig."
+                                )
+                                OAuthCredentialsView(profileId: profileId, menuBarManager: manager)
+                                Spacer()
+                            }
+                            .padding()
+                        }
                     }
 
                 // Profile Settings

@@ -199,7 +199,7 @@ final class StatusBarUIManager {
     }
 
     /// Updates all multi-profile status items
-    func updateMultiProfileButtons(profiles: [Profile], config: MultiProfileDisplayConfig) {
+    func updateMultiProfileButtons(profiles: [Profile], config: MultiProfileDisplayConfig, failedProfileIds: Set<UUID> = []) {
         guard isMultiProfileMode else { return }
 
         for profile in profiles where profile.isSelectedForDisplay {
@@ -207,6 +207,17 @@ final class StatusBarUIManager {
                   let button = statusItem.button else {
                 continue
             }
+
+            // Show warning icon for profiles with auth failure
+            if failedProfileIds.contains(profile.id) {
+                if let warningImage = NSImage(systemSymbolName: "exclamationmark.triangle.fill", accessibilityDescription: "Auth failed") {
+                    button.image = warningImage
+                    button.image?.isTemplate = false
+                    button.contentTintColor = NSColor.systemOrange
+                }
+                continue
+            }
+            button.contentTintColor = nil
 
             // Get actual menu bar appearance from the button (based on wallpaper, not system mode)
             let menuBarIsDark = button.effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua

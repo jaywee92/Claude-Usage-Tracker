@@ -10,6 +10,7 @@ struct OAuthCredentialsView: View {
     let profileId: UUID
 
     @StateObject private var profileManager = ProfileManager.shared
+    @ObservedObject var menuBarManager: MenuBarManager
 
     // Flow state
     private enum FlowStep {
@@ -22,6 +23,7 @@ struct OAuthCredentialsView: View {
     @State private var step: FlowStep = .idle
     @State private var authURL: URL?
     @State private var pkceVerifier: String?
+    @State private var pkceState: String?
     @State private var codeInput: String = ""
     @State private var errorMessage: String?
 
@@ -33,75 +35,96 @@ struct OAuthCredentialsView: View {
         profile?.oauthCredentials
     }
 
+    private var hasAuthError: Bool {
+        menuBarManager.profileAuthFailed.contains(profileId)
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Image(systemName: "lock.shield")
-                    .foregroundColor(.accentColor)
-                Text("Claude.ai OAuth")
-                    .font(.headline)
-                if let name = profile?.name {
-                    Text("· \(name)")
-                        .font(.headline)
-                        .foregroundColor(.secondary)
-                }
-            }
-
-            if oauthCreds != nil {
-                connectedView
-            } else {
-                switch step {
-                case .idle:
-                    notConnectedView
-                case .waitingForCode:
-                    codeInputView
-                case .exchanging:
-                    HStack(spacing: 8) {
-                        ProgressView().scaleEffect(0.7)
-                        Text("Token wird ausgetauscht...")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
-                    }
-                case .connected:
-                    // Will flip to connectedView once profile reloads
-                    HStack(spacing: 8) {
-                        ProgressView().scaleEffect(0.7)
-                        Text("Verbunden")
-                            .font(.subheadline)
-                            .foregroundColor(.secondary)
+        SettingsSectionCard(
+            title: profile?.name ?? "OAuth",
+            subtitle: hasAuthError ? "Verbindungsfehler" : (oauthCreds != nil ? "Verbunden" : "Nicht verbunden")
+        ) {
+            VStack(alignment: .leading, spacing: 12) {
+                if oauthCreds != nil {
+                    connectedView
+                } else {
+                    switch step {
+                    case .idle:
+                        notConnectedView
+                    case .waitingForCode:
+                        codeInputView
+                    case .exchanging:
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Token wird ausgetauscht...")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
+                    case .connected:
+                        HStack(spacing: 8) {
+                            ProgressView().scaleEffect(0.7)
+                            Text("Verbunden")
+                                .font(.subheadline)
+                                .foregroundColor(.secondary)
+                        }
                     }
                 }
-            }
 
-            if let error = errorMessage {
-                Text(error)
-                    .font(.caption)
-                    .foregroundColor(.red)
+                if let error = errorMessage {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundColor(.red)
+                }
             }
         }
-        .padding()
-        .background(Color(NSColor.controlBackgroundColor))
-        .cornerRadius(8)
     }
 
     // MARK: - Connected View
 
     private var connectedView: some View {
         VStack(alignment: .leading, spacing: 8) {
-            HStack(spacing: 6) {
-                Circle()
-                    .fill(Color.green)
-                    .frame(width: 8, height: 8)
-                Text("Verbunden")
-                    .font(.subheadline)
-                    .foregroundColor(.secondary)
-            }
+            if hasAuthError {
+                HStack(spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .foregroundColor(.orange)
+                        .font(.system(size: 11))
+                    Text("Authentifizierung fehlgeschlagen — Token widerrufen oder abgelaufen.")
+                        .font(.subheadline)
+                        .foregroundColor(.orange)
+                }
 
-            Button("Verbindung trennen") {
-                disconnect()
+                HStack(spacing: 8) {
+                    Button("Neu verbinden") {
+                        codeInput = ""
+                        errorMessage = nil
+                        disconnect()
+                        openBrowser()
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.orange)
+
+                    Button("Verbindung trennen") {
+                        disconnect()
+                    }
+                    .buttonStyle(.bordered)
+                    .tint(.red)
+                }
+            } else {
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(Color.green)
+                        .frame(width: 8, height: 8)
+                    Text("Verbunden")
+                        .font(.subheadline)
+                        .foregroundColor(.secondary)
+                }
+
+                Button("Verbindung trennen") {
+                    disconnect()
+                }
+                .buttonStyle(.bordered)
+                .tint(.red)
             }
-            .buttonStyle(.bordered)
-            .tint(.red)
         }
     }
 
@@ -175,9 +198,10 @@ struct OAuthCredentialsView: View {
         codeInput = ""
 
         do {
-            let (url, verifier) = try OAuthService().buildAuthorizationURL()
+            let (url, verifier, state) = try OAuthService().buildAuthorizationURL()
             authURL = url
             pkceVerifier = verifier
+            pkceState = state
             step = .waitingForCode
             NSWorkspace.shared.open(url)
         } catch {
@@ -187,7 +211,7 @@ struct OAuthCredentialsView: View {
 
     @MainActor
     private func submitCode() async {
-        guard let verifier = pkceVerifier else { return }
+        guard let verifier = pkceVerifier, let state = pkceState else { return }
         let code = codeInput.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !code.isEmpty else { return }
 
@@ -195,7 +219,7 @@ struct OAuthCredentialsView: View {
         errorMessage = nil
 
         do {
-            let credentials = try await OAuthService().exchangeCode(code, verifier: verifier)
+            let credentials = try await OAuthService().exchangeCode(code, verifier: verifier, state: state)
             saveCredentials(credentials)
             step = .connected
             codeInput = ""
@@ -220,5 +244,7 @@ struct OAuthCredentialsView: View {
         profiles[index].oauthCredentials = creds
         ProfileStore.shared.saveProfiles(profiles)
         ProfileManager.shared.updateProfile(profiles[index])
+        // Clear the auth error so the UI shows "Verbunden" and not the error banner again
+        menuBarManager.clearAuthFailed(for: profileId)
     }
 }

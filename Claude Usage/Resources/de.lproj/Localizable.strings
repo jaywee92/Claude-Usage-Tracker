@@ -333,7 +333,7 @@
 "claudecode.requirement_sessionkey" = "• Sitzungsschlüssel im Tab 'Anmeldedaten → Claude.ai' konfiguriert";
 "claudecode.requirement_restart" = "• Claude CLI nach Anwendung der Änderungen neu starten";
 "claudecode.error_no_components" = "Bitte wählen Sie mindestens eine Komponente zur Anzeige";
-"claudecode.error_no_sessionkey" = "Sitzungsschlüssel nicht konfiguriert. Bitte richten Sie ihn zuerst im Tab 'Persönliche Nutzung' ein.";
+"claudecode.error_no_sessionkey" = "Keine Anmeldedaten gefunden. Bitte verbinde dein Profil zuerst über OAuth in den Einstellungen.";
 "claudecode.success_applied" = "Konfiguration angewendet! Starten Sie Claude CLI neu, um die Änderungen zu sehen.";
 "claudecode.success_disabled" = "Statuszeile deaktiviert. Starten Sie Claude CLI neu.";
 "claudecode.preview_no_components" = "Keine Komponenten ausgewählt";

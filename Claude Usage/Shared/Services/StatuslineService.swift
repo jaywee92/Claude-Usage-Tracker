@@ -10,101 +10,67 @@ class StatuslineService {
 
     // MARK: - Embedded Scripts
 
-    /// Swift script that fetches Claude usage data from the API.
-    /// Installed to ~/.claude/fetch-claude-usage.swift and executed by the bash statusline script.
-    /// The session key and organization ID are injected into this script when statusline is enabled.
-    private func generateSwiftScript(sessionKey: String, organizationId: String) -> String {
-        return """
+    /// Swift script that reads usage from the cache file written by Claude Usage app.
+    /// 1. Runs `claude auth status` to find the active account email.
+    /// 2. Reads usage-cache.json written by the app (checks sandbox container first, then ~/.claude/).
+    /// No direct API calls needed — the app is the bridge.
+    private let oauthSwiftScript = """
 #!/usr/bin/env swift
 
 import Foundation
-func readSessionKey() -> String? {
-    // Session key injected from Keychain by Claude Usage app
-    let injectedKey = "\(sessionKey)"
-    let trimmedKey = injectedKey.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmedKey.isEmpty ? nil : trimmedKey
-}
-func readOrganizationId() -> String? {
-    // Organization ID injected from settings by Claude Usage app
-    let injectedOrgId = "\(organizationId)"
-    let trimmedOrgId = injectedOrgId.trimmingCharacters(in: .whitespacesAndNewlines)
-    return trimmedOrgId.isEmpty ? nil : trimmedOrgId
-}
-func fetchUsageData(sessionKey: String, orgId: String) async throws -> (utilization: Int, resetsAt: String?) {
-    // Build URL safely - validate orgId doesn't contain path traversal
-    guard !orgId.contains(".."), !orgId.contains("/") else {
-        throw NSError(domain: "ClaudeAPI", code: 5, userInfo: [NSLocalizedDescriptionKey: "Invalid organization ID"])
-    }
 
-    guard let url = URL(string: "https://claude.ai/api/organizations/\\(orgId)/usage") else {
-        throw NSError(domain: "ClaudeAPI", code: 0, userInfo: [NSLocalizedDescriptionKey: "Invalid URL"])
-    }
-
-    var request = URLRequest(url: url)
-    request.setValue("sessionKey=\\(sessionKey)", forHTTPHeaderField: "Cookie")
-    request.setValue("application/json", forHTTPHeaderField: "Accept")
-    request.httpMethod = "GET"
-
-    let (data, response) = try await URLSession.shared.data(for: request)
-
-    guard let httpResponse = response as? HTTPURLResponse,
-          httpResponse.statusCode == 200 else {
-        throw NSError(domain: "ClaudeAPI", code: 3, userInfo: [NSLocalizedDescriptionKey: "Failed to fetch usage"])
-    }
-
-    if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-       let fiveHour = json["five_hour"] as? [String: Any],
-       let utilization = fiveHour["utilization"] as? Int {
-        let resetsAt = fiveHour["resets_at"] as? String
-        return (utilization, resetsAt)
-    }
-
-    throw NSError(domain: "ClaudeAPI", code: 4, userInfo: [NSLocalizedDescriptionKey: "Invalid response format"])
+func getActiveCliEmail() -> String? {
+    let candidates = [
+        "\\(NSHomeDirectory())/.local/bin/claude",
+        "/usr/local/bin/claude",
+        "/opt/homebrew/bin/claude"
+    ]
+    guard let claudePath = candidates.first(where: { FileManager.default.fileExists(atPath: $0) }) else { return nil }
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: claudePath)
+    process.arguments = ["auth", "status", "--json"]
+    process.environment = ProcessInfo.processInfo.environment
+    let pipe = Pipe()
+    process.standardOutput = pipe
+    process.standardError = Pipe()
+    try? process.run()
+    process.waitUntilExit()
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
+    guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+          let ok = json["loggedIn"] as? Bool, ok,
+          let email = json["email"] as? String else { return nil }
+    return email
 }
 
-// Main execution
-// Use Task to run async code, RunLoop keeps script alive until exit() is called
-Task {
-    guard let sessionKey = readSessionKey() else {
-        print("ERROR:NO_SESSION_KEY")
-        exit(1)
+func getUsageFromCache(for email: String) -> (utilization: Int, resetsAt: String?)? {
+    let home = NSHomeDirectory()
+    let candidates = [
+        "\\(home)/Library/Containers/com.jaywee92.Claude-Usage/Data/.claude/usage-cache.json",
+        "\\(home)/.claude/usage-cache.json",
+    ]
+    for path in candidates {
+        let cacheURL = URL(fileURLWithPath: path)
+        guard let data = try? Data(contentsOf: cacheURL),
+              let entries = try? JSONSerialization.jsonObject(with: data) as? [[String: Any]] else { continue }
+        guard let entry = entries.first(where: { ($0["email"] as? String)?.lowercased() == email.lowercased() }) else { continue }
+        return (entry["utilization"] as? Int ?? 0, entry["resetsAt"] as? String)
     }
-
-    guard let orgId = readOrganizationId() else {
-        print("ERROR:NO_ORG_CONFIGURED")
-        exit(1)
-    }
-
-    do {
-        let (utilization, resetsAt) = try await fetchUsageData(sessionKey: sessionKey, orgId: orgId)
-
-        // Output format: UTILIZATION|RESETS_AT
-        if let resets = resetsAt {
-            print("\\(utilization)|\\(resets)")
-        } else {
-            print("\\(utilization)|")
-        }
-        exit(0)
-    } catch {
-        print("ERROR:\\(error.localizedDescription)")
-        exit(1)
-    }
+    return nil
 }
 
-// Keep script alive while async Task executes
-RunLoop.main.run()
+guard let email = getActiveCliEmail() else { print("ERROR:NO_CLI_ACCOUNT"); exit(1) }
+guard let (utilization, resetsAt) = getUsageFromCache(for: email) else {
+    print("ERROR:NO_CACHE_FOR:\\(email)")
+    exit(1)
+}
+print("\\(utilization)|\\(resetsAt ?? "")")
+exit(0)
 """
-    }
 
-    /// Placeholder Swift script for when statusline is disabled
-    /// This script returns an error indicating no session key is available
+    /// Placeholder script for when statusline is installed but OAuth not available
     private let placeholderSwiftScript = """
 #!/usr/bin/env swift
-
-import Foundation
-
-// No session key available - statusline is disabled
-print("ERROR:NO_SESSION_KEY")
+print("ERROR:NO_OAUTH_TOKEN")
 exit(1)
 """
 
@@ -271,8 +237,7 @@ printf "%s\\n" "$output"
 
     // MARK: - Installation
 
-    /// Installs statusline scripts with session key injection from active profile
-    /// - Parameter injectSessionKey: If true, injects the session key from active profile into the Swift script
+    /// Installs statusline scripts. Uses OAuth token from CLI keychain — no session key needed.
     func installScripts(injectSessionKey: Bool = false) throws {
         let claudeDir = Constants.ClaudePaths.claudeDirectory
 
@@ -280,33 +245,11 @@ printf "%s\\n" "$output"
             try FileManager.default.createDirectory(at: claudeDir, withIntermediateDirectories: true)
         }
 
-        // Install Swift script (with or without session key)
+        // Always install the OAuth-based script
         let swiftDestination = claudeDir.appendingPathComponent("fetch-claude-usage.swift")
-        let swiftScriptContent: String
+        LoggingService.shared.log("Installing OAuth-based statusline Swift script")
 
-        if injectSessionKey {
-            // Load session key and org ID from active profile
-            guard let activeProfile = ProfileManager.shared.activeProfile else {
-                throw StatuslineError.noActiveProfile
-            }
-
-            guard let sessionKey = activeProfile.claudeSessionKey else {
-                throw StatuslineError.sessionKeyNotFound
-            }
-
-            guard let organizationId = activeProfile.organizationId else {
-                throw StatuslineError.organizationNotConfigured
-            }
-
-            swiftScriptContent = generateSwiftScript(sessionKey: sessionKey, organizationId: organizationId)
-            LoggingService.shared.log("Injected session key and org ID from profile '\(activeProfile.name)' into statusline")
-        } else {
-            // Install placeholder script
-            swiftScriptContent = placeholderSwiftScript
-            LoggingService.shared.log("Installed placeholder statusline Swift script")
-        }
-
-        try swiftScriptContent.write(to: swiftDestination, atomically: true, encoding: .utf8)
+        try oauthSwiftScript.write(to: swiftDestination, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o755],
             ofItemAtPath: swiftDestination.path
@@ -370,8 +313,8 @@ SHOW_RESET_TIME=\(showResetTime ? "1" : "0")
         let commandPath = "\(homeDir)/.claude/statusline-command.sh"
 
         if enabled {
-            // Install scripts with session key injection
-            try installScripts(injectSessionKey: true)
+            // Install OAuth-based scripts
+            try installScripts()
 
             // Update settings.json
             var settings: [String: Any] = [:]
@@ -391,8 +334,8 @@ SHOW_RESET_TIME=\(showResetTime ? "1" : "0")
             let jsonData = try JSONSerialization.data(withJSONObject: settings, options: .prettyPrinted)
             try jsonData.write(to: settingsPath)
         } else {
-            // Remove session key from Swift script
-            try removeSessionKeyFromScript()
+            // Install placeholder script
+            try installScripts(injectSessionKey: false)
 
             // Update settings.json
             if FileManager.default.fileExists(atPath: settingsPath.path) {
@@ -423,15 +366,14 @@ SHOW_RESET_TIME=\(showResetTime ? "1" : "0")
     /// Updates scripts only if already installed (installation is optional)
     func updateScriptsIfInstalled() throws {
         guard isInstalled else { return }
-        try installScripts(injectSessionKey: true)
+        try installScripts()
     }
 
-    /// Checks if active profile has a valid session key
+    /// Checks if active profile has valid credentials for statusline (OAuth or session key)
     func hasValidSessionKey() -> Bool {
-        guard let activeProfile = ProfileManager.shared.activeProfile,
-              let key = activeProfile.claudeSessionKey else {
-            return false
-        }
+        guard let activeProfile = ProfileManager.shared.activeProfile else { return false }
+        if let oauth = activeProfile.oauthCredentials, !oauth.isExpired { return true }
+        guard let key = activeProfile.claudeSessionKey else { return false }
 
         // Use professional validator for comprehensive validation
         let validator = SessionKeyValidator()

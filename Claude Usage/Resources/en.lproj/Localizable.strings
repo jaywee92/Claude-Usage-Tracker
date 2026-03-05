@@ -347,7 +347,7 @@
 "claudecode.requirement_sessionkey" = "• Session key configured in Credentials → Claude.ai tab";
 "claudecode.requirement_restart" = "• Restart Claude CLI after applying changes";
 "claudecode.error_no_components" = "Please select at least one component to display";
-"claudecode.error_no_sessionkey" = "Session key not configured. Please set it in the Personal Usage tab first.";
+"claudecode.error_no_sessionkey" = "No credentials found. Please connect your profile via OAuth in Settings first.";
 "claudecode.success_applied" = "Configuration applied! Restart Claude CLI to see changes.";
 "claudecode.success_disabled" = "Statusline disabled. Restart Claude CLI.";
 "claudecode.preview_no_components" = "No components selected";

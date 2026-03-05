@@ -40,7 +40,8 @@ struct PopoverContentView: View {
                     }
                 },
                 onManageProfiles: onPreferences,
-                clickedProfileId: manager.clickedProfileId
+                clickedProfileId: manager.clickedProfileId,
+                failedProfileIds: manager.profileAuthFailed
             )
 
             // Intelligent Usage Dashboard
@@ -75,6 +76,7 @@ struct ProfileSwitcherCompact: View {
     @StateObject private var profileManager = ProfileManager.shared
     @State private var isHovered = false
     let onManageProfiles: () -> Void
+    var failedProfileIds: Set<UUID> = []
 
     var body: some View {
         Menu {
@@ -97,18 +99,28 @@ struct ProfileSwitcherCompact: View {
 
                         // Badges
                         HStack(spacing: 4) {
-                            // CLI Account badge
-                            if profile.hasCliAccount {
-                                Image(systemName: "terminal.fill")
+                            // Auth failure badge
+                            if failedProfileIds.contains(profile.id) {
+                                Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.system(size: 9))
-                                    .foregroundColor(.green)
+                                    .foregroundColor(.orange)
+                                    .help("Authentication failed — re-connect OAuth in Settings")
                             }
 
-                            // Claude.ai badge
-                            if profile.claudeSessionKey != nil {
-                                Image(systemName: "checkmark.circle.fill")
+                            // Active CLI session badge
+                            if profile.id == profileManager.cliMatchedProfileId {
+                                Image(systemName: "terminal.fill")
                                     .font(.system(size: 9))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.mint)
+                                    .help("Active CLI account")
+                            }
+
+                            // OAuth connected badge
+                            if profile.hasOAuthCredentials && !failedProfileIds.contains(profile.id) {
+                                Image(systemName: "lock.shield.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.green)
+                                    .help("OAuth connected")
                             }
 
                             // Active indicator
@@ -178,6 +190,7 @@ struct ProfileSwitcherBar: View {
     @StateObject private var profileManager = ProfileManager.shared
     @State private var isHovered = false
     let onManageProfiles: () -> Void
+    var failedProfileIds: Set<UUID> = []
 
     var body: some View {
         Menu {
@@ -200,18 +213,28 @@ struct ProfileSwitcherBar: View {
 
                         // Badges
                         HStack(spacing: 4) {
-                            // CLI Account badge
-                            if profile.hasCliAccount {
-                                Image(systemName: "terminal.fill")
+                            // Auth failure badge
+                            if failedProfileIds.contains(profile.id) {
+                                Image(systemName: "exclamationmark.triangle.fill")
                                     .font(.system(size: 9))
-                                    .foregroundColor(.green)
+                                    .foregroundColor(.orange)
+                                    .help("Authentication failed — re-connect OAuth in Settings")
                             }
 
-                            // Claude.ai badge
-                            if profile.claudeSessionKey != nil {
-                                Image(systemName: "checkmark.circle.fill")
+                            // Active CLI session badge
+                            if profile.id == profileManager.cliMatchedProfileId {
+                                Image(systemName: "terminal.fill")
                                     .font(.system(size: 9))
-                                    .foregroundColor(.blue)
+                                    .foregroundColor(.mint)
+                                    .help("Active CLI account")
+                            }
+
+                            // OAuth connected badge
+                            if profile.hasOAuthCredentials && !failedProfileIds.contains(profile.id) {
+                                Image(systemName: "lock.shield.fill")
+                                    .font(.system(size: 9))
+                                    .foregroundColor(.green)
+                                    .help("OAuth connected")
                             }
 
                             // Active indicator
@@ -355,6 +378,7 @@ struct SmartHeader: View {
     let onRefresh: () -> Void
     let onManageProfiles: () -> Void
     var clickedProfileId: UUID? = nil  // Profile ID that was clicked in multi-profile mode
+    var failedProfileIds: Set<UUID> = []
 
     @StateObject private var profileManager = ProfileManager.shared
 
@@ -436,7 +460,7 @@ struct SmartHeader: View {
                         .padding(.vertical, 3)
                     } else {
                         // Single-profile mode: full profile switcher dropdown
-                        ProfileSwitcherCompact(onManageProfiles: onManageProfiles)
+                        ProfileSwitcherCompact(onManageProfiles: onManageProfiles, failedProfileIds: failedProfileIds)
                     }
 
                     // Claude Status Badge

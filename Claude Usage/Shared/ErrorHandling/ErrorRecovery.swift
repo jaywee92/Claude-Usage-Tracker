@@ -47,7 +47,7 @@ class ErrorRecovery {
             // Server errors might be temporary
             return .retryAfter(delay: exponentialBackoff(attempt: attemptNumber), strategy: .exponential)
 
-        case .apiUnauthorized:
+        case .apiUnauthorized, .apiTokenRevoked:
             // Don't retry auth errors - user needs to fix session key
             return .doNotRetry(reason: "Authentication required - please update session key")
 

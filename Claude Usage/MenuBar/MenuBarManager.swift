@@ -20,6 +20,7 @@ class MenuBarManager: NSObject, ObservableObject {
     private var lastRefreshTriggerTime: Date = .distantPast
 
     // Per-profile auth failure backoff: skip profiles that returned 403 until backoff expires
+    @Published private(set) var profileAuthFailed: Set<UUID> = []
     private var profileAuthBackoff: [UUID: Date] = [:]
     private static let authBackoffDuration: TimeInterval = 5 * 60  // 5 minutes
 
@@ -766,6 +767,7 @@ class MenuBarManager: NSObject, ObservableObject {
                     await MainActor.run {
                         // Clear auth backoff on success
                         self.profileAuthBackoff.removeValue(forKey: profile.id)
+                        self.profileAuthFailed.remove(profile.id)
 
                         // Save to profile
                         self.profileManager.saveClaudeUsage(newUsage, for: profile.id)
@@ -778,14 +780,22 @@ class MenuBarManager: NSObject, ObservableObject {
                     }
                 } catch {
                     let appError = AppError.wrap(error)
-                    if appError.code == .apiUnauthorized {
+                    if appError.code == .apiTokenRevoked {
+                        // 403: token explicitly revoked — show ⚠️ badge and apply backoff
+                        await MainActor.run {
+                            self.profileAuthBackoff[profile.id] = Date()
+                            self.profileAuthFailed.insert(profile.id)
+                        }
+                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)\nDetails: \(appError.technicalDetails ?? "none")")
+                        LoggingService.shared.log("MenuBarManager: Profile '\(profile.name)' token revoked — will skip for \(Int(Self.authBackoffDuration / 60))m")
+                    } else if appError.code == .apiUnauthorized {
+                        // 401: token not supported / temporarily invalid — apply backoff but no ⚠️ badge
                         await MainActor.run {
                             self.profileAuthBackoff[profile.id] = Date()
                         }
-                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)")
-                        LoggingService.shared.log("MenuBarManager: Profile '\(profile.name)' auth failed — will skip for \(Int(Self.authBackoffDuration / 60))m (use manual refresh to retry sooner)")
+                        LoggingService.shared.log("MenuBarManager: Profile '\(profile.name)' auth returned 401 — will skip for \(Int(Self.authBackoffDuration / 60))m (use manual refresh to retry sooner)")
                     } else {
-                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)")
+                        LoggingService.shared.logError("Failed to refresh profile '\(profile.name)': \(error.localizedDescription)\nDetails: \(AppError.wrap(error).technicalDetails ?? "none")")
                     }
                 }
             }
@@ -795,25 +805,40 @@ class MenuBarManager: NSObject, ObservableObject {
                 let config = self.profileManager.multiProfileConfig
                 self.statusBarUIManager?.updateMultiProfileButtons(
                     profiles: self.profileManager.profiles,
-                    config: config
+                    config: config,
+                    failedProfileIds: self.profileAuthFailed
                 )
                 self.isRefreshing = false
             }
         }
     }
 
+    /// Allows external callers (e.g. OAuthCredentialsView) to clear the auth-failure state
+    /// so the UI immediately reflects a successful re-connect.
+    @MainActor
+    func clearAuthFailed(for profileId: UUID) {
+        profileAuthFailed.remove(profileId)
+        profileAuthBackoff.removeValue(forKey: profileId)
+    }
+
     /// Fetches usage data for a specific profile using its credentials
     private func fetchUsageForProfile(_ profile: Profile) async throws -> ClaudeUsage {
-        guard let sessionKey = profile.claudeSessionKey,
-              let orgId = profile.organizationId else {
-            throw AppError(
-                code: .sessionKeyNotFound,
-                message: "Missing credentials for profile '\(profile.name)'",
-                isRecoverable: false
-            )
+        // Priority 1: OAuth credentials (preferred) — pass even if expired so fetchUsageData can refresh
+        if let oauthCreds = profile.oauthCredentials {
+            return try await apiService.fetchUsageData(oauthCredentials: oauthCreds, profile: profile)
         }
 
-        return try await apiService.fetchUsageData(sessionKey: sessionKey, organizationId: orgId)
+        // Priority 2: claude.ai session key + org ID (legacy)
+        if let sessionKey = profile.claudeSessionKey, let orgId = profile.organizationId {
+            return try await apiService.fetchUsageData(sessionKey: sessionKey, organizationId: orgId)
+        }
+
+        throw AppError(
+            code: .sessionKeyNotFound,
+            message: "Missing credentials for profile '\(profile.name)'",
+            isRecoverable: true,
+            recoverySuggestion: "Open Settings and connect this profile via OAuth."
+        )
     }
 
     private func setupSingleProfileMode() {
@@ -1005,7 +1030,7 @@ class MenuBarManager: NSObject, ObservableObject {
             NSApp.setActivationPolicy(.regular)
 
             // Create and show the settings window programmatically
-            let settingsView = SettingsView()
+            let settingsView = SettingsView(menuBarManager: self)
             let hostingController = NSHostingController(rootView: settingsView)
 
             let window = NSWindow(contentViewController: hostingController)

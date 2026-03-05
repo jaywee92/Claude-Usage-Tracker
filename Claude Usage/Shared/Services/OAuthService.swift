@@ -22,10 +22,10 @@ final class OAuthService {
 
     // MARK: - Public API
 
-    /// Step 1: Build the authorization URL and generate PKCE verifier.
+    /// Step 1: Build the authorization URL and generate PKCE verifier + state.
     /// Open this URL in the browser. The server shows a code the user must copy.
-    /// - Returns: (authorizationURL, pkceVerifier) — store the verifier for step 2.
-    func buildAuthorizationURL() throws -> (url: URL, verifier: String) {
+    /// - Returns: (authorizationURL, pkceVerifier, state) — store both for step 2.
+    func buildAuthorizationURL() throws -> (url: URL, verifier: String, state: String) {
         let verifier = generateCodeVerifier()
         let challenge = generateCodeChallenge(from: verifier)
         let state = UUID().uuidString
@@ -43,20 +43,29 @@ final class OAuthService {
         guard let authURL = components.url else {
             throw OAuthError.invalidURL
         }
-        return (authURL, verifier)
+        return (authURL, verifier, state)
     }
 
     /// Step 2: Exchange the authorization code (copied by user) for tokens.
     /// - Parameters:
     ///   - code: The code displayed on the claude.ai page after login.
     ///   - verifier: The PKCE verifier returned by buildAuthorizationURL().
-    func exchangeCode(_ code: String, verifier: String) async throws -> OAuthCredentials {
+    ///   - state: The state value returned by buildAuthorizationURL().
+    func exchangeCode(_ code: String, verifier: String, state: String) async throws -> OAuthCredentials {
+        // The code displayed by claude.ai is in the format "<code>#<state>".
+        // Split on '#' and use only the part before it as the actual code.
+        let rawCode = code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let parts = rawCode.components(separatedBy: "#")
+        let actualCode = parts.first ?? rawCode
+        let actualState = parts.count > 1 ? parts[1...].joined(separator: "#") : state
+
         let body: [String: String] = [
             "grant_type":    "authorization_code",
-            "code":          code.trimmingCharacters(in: .whitespacesAndNewlines),
+            "code":          actualCode,
             "redirect_uri":  OAuth.redirectURI,
             "client_id":     OAuth.clientId,
             "code_verifier": verifier,
+            "state":         actualState,
         ]
 
         let response = try await postTokenRequest(body: body)
@@ -95,33 +104,22 @@ final class OAuthService {
             throw OAuthError.invalidURL
         }
 
-        // OAuth 2.0 token endpoints require application/x-www-form-urlencoded (not JSON).
-        // We percent-encode each value manually because URLComponents.query strips '#' fragments.
-        let allowed = CharacterSet.alphanumerics.union(.init(charactersIn: "-._~"))
-        let formString = body.map { key, value in
-            let encodedKey   = key.addingPercentEncoding(withAllowedCharacters: allowed) ?? key
-            let encodedValue = value.addingPercentEncoding(withAllowedCharacters: allowed) ?? value
-            return "\(encodedKey)=\(encodedValue)"
-        }.joined(separator: "&")
-        guard let formBody = formString.data(using: .utf8) else {
-            throw OAuthError.tokenExchangeFailed
-        }
+        // Claude.ai OAuth token endpoint expects a JSON body (same as the CLI).
+        let jsonBody = try JSONEncoder().encode(body)
 
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("application/x-www-form-urlencoded", forHTTPHeaderField: "Content-Type")
-        request.httpBody = formBody
-
-        LoggingService.shared.log("OAuth POST \(url.absoluteString)")
-        LoggingService.shared.log("OAuth body: \(String(data: formBody, encoding: .utf8) ?? "(nil)")")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = jsonBody
 
         let (data, response) = try await URLSession.shared.data(for: request)
 
         guard let httpResponse = response as? HTTPURLResponse,
               httpResponse.statusCode == 200 else {
             let responseBody = String(data: data, encoding: .utf8) ?? "(empty)"
-            LoggingService.shared.log("OAuth token request failed: \(responseBody)")
-            throw OAuthError.tokenExchangeFailed
+            let status = (response as? HTTPURLResponse)?.statusCode ?? -1
+            LoggingService.shared.log("OAuth token request failed (HTTP \(status)): \(responseBody)")
+            throw OAuthError.tokenExchangeFailed(detail: responseBody)
         }
 
         return try JSONDecoder().decode(TokenResponse.self, from: data)
@@ -160,16 +158,24 @@ enum OAuthError: LocalizedError {
     case invalidURL
     case noCallbackURL
     case invalidCallback
-    case tokenExchangeFailed
+    case tokenExchangeFailed(detail: String)
     case refreshFailed
 
     var errorDescription: String? {
         switch self {
-        case .invalidURL:          return "Ungültige OAuth URL."
-        case .noCallbackURL:       return "Kein Callback von Claude.ai erhalten."
-        case .invalidCallback:     return "OAuth Callback ungültig (State-Mismatch)."
-        case .tokenExchangeFailed: return "Token-Austausch fehlgeschlagen. Bitte erneut versuchen."
-        case .refreshFailed:       return "Token-Refresh fehlgeschlagen. Bitte erneut verbinden."
+        case .invalidURL:                   return "Ungültige OAuth URL."
+        case .noCallbackURL:                return "Kein Callback von Claude.ai erhalten."
+        case .invalidCallback:              return "OAuth Callback ungültig (State-Mismatch)."
+        case .tokenExchangeFailed(let d):
+            // Extract a user-friendly message from the server response if possible
+            if let data = d.data(using: .utf8),
+               let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let error = json["error"] as? [String: Any],
+               let msg = error["message"] as? String {
+                return "Token-Austausch fehlgeschlagen: \(msg)"
+            }
+            return "Token-Austausch fehlgeschlagen. Bitte neuen Code generieren."
+        case .refreshFailed:                return "Token-Refresh fehlgeschlagen. Bitte erneut verbinden."
         }
     }
 }

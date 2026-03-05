@@ -90,9 +90,15 @@ class ClaudeAPIService: APIServiceProtocol {
             }
         }
 
-        // Priority 2: OAuth credentials (with auto-refresh)
+        // Priority 2: CLI keychain token (always fresh, requires anthropic-beta header)
+        if let cliToken = CLIAuthStatusService.shared.readCLICredentials()?.accessToken {
+            LoggingService.shared.log("ClaudeAPIService: Using CLI keychain token")
+            return .cliOAuth(cliToken)
+        }
+
+        // Priority 3: OAuth credentials (with auto-refresh)
         if var oauthCreds = activeProfile.oauthCredentials {
-            if oauthCreds.expiresInFiveMinutes {
+            if oauthCreds.expiresInFiveMinutes || oauthCreds.isExpired {
                 do {
                     let refreshed = try await OAuthService().refreshToken(oauthCreds)
                     oauthCreds = refreshed
@@ -113,38 +119,6 @@ class ClaudeAPIService: APIServiceProtocol {
             }
         }
 
-        // Fall back to saved CLI OAuth token if available and not expired
-        if let cliJSON = activeProfile.cliCredentialsJSON {
-            if !ClaudeCodeSyncService.shared.isTokenExpired(cliJSON),
-               let accessToken = ClaudeCodeSyncService.shared.extractAccessToken(from: cliJSON) {
-                LoggingService.shared.log("ClaudeAPIService: Falling back to saved CLI OAuth token")
-                return .cliOAuth(accessToken)
-            } else {
-                LoggingService.shared.log("ClaudeAPIService: Saved CLI OAuth token is expired or invalid")
-            }
-        }
-
-        // Fall back to reading CLI credentials directly from system Keychain
-        do {
-            if let systemCredentials = try ClaudeCodeSyncService.shared.readSystemCredentials() {
-                LoggingService.shared.log("ClaudeAPIService: Found CLI credentials in system Keychain")
-
-                // Validate token is not expired
-                if ClaudeCodeSyncService.shared.isTokenExpired(systemCredentials) {
-                    LoggingService.shared.log("ClaudeAPIService: System Keychain CLI token is expired")
-                } else if let accessToken = ClaudeCodeSyncService.shared.extractAccessToken(from: systemCredentials) {
-                    LoggingService.shared.log("ClaudeAPIService: Using CLI credentials from system Keychain")
-                    return .cliOAuth(accessToken)
-                } else {
-                    LoggingService.shared.log("ClaudeAPIService: Could not extract access token from system Keychain credentials")
-                }
-            } else {
-                LoggingService.shared.log("ClaudeAPIService: No CLI credentials found in system Keychain")
-            }
-        } catch {
-            LoggingService.shared.log("ClaudeAPIService: Could not read system CLI credentials: \(error.localizedDescription)")
-        }
-
         LoggingService.shared.logError("ClaudeAPIService.getAuthentication: No valid credentials for usage data")
         throw AppError.sessionKeyNotFound()
     }
@@ -160,11 +134,10 @@ class ClaudeAPIService: APIServiceProtocol {
             request.setValue("application/json", forHTTPHeaderField: "Accept")
 
         case .cliOAuth(let accessToken):
-            // CLI OAuth authentication (requires specific headers)
+            // CLI OAuth authentication
             request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.setValue("claude-code/2.1.5", forHTTPHeaderField: "User-Agent")
-            request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
 
         case .consoleAPISession(let apiKey):
             // Console API authentication
@@ -400,6 +373,91 @@ class ClaudeAPIService: APIServiceProtocol {
         return try parseUsageResponse(usageData)
     }
 
+    /// Fetches usage data for a profile using the CLI's keychain token (preferred) or the stored OAuth token.
+    /// The CLI token (from "Claude Code-credentials" keychain) requires the anthropic-beta header.
+    func fetchUsageData(oauthCredentials: OAuthCredentials, profile: Profile) async throws -> ClaudeUsage {
+        // Prefer the active CLI token from the system keychain — it's the one that actually works.
+        let cliCreds = await CLIAuthStatusService.shared.readCLICredentials()
+        let cliStatus = await CLIAuthStatusService.shared.fetchStatus()
+
+        // Use CLI token if this profile matches the active CLI account
+        if let token = cliCreds?.accessToken,
+           let email = cliStatus?.email,
+           email.lowercased() == profile.name.lowercased() {
+            LoggingService.shared.log("Using CLI keychain token for '\(profile.name)'")
+            return try await fetchUsageWithCLIToken(token, profileName: profile.name)
+        }
+
+        // Fallback: try our own OAuth token (browser-flow). Works for non-active accounts
+        // if the endpoint ever supports them; currently returns 401 for most accounts.
+        LoggingService.shared.log("Trying stored OAuth token for '\(profile.name)' (not active CLI account)")
+        var creds = oauthCredentials
+
+        if creds.expiresInFiveMinutes || creds.isExpired {
+            LoggingService.shared.log("OAuth token for '\(profile.name)' expired/expiring — attempting refresh")
+            do {
+                let refreshed = try await OAuthService().refreshToken(creds)
+                creds = refreshed
+                var profiles = ProfileStore.shared.loadProfiles()
+                if let idx = profiles.firstIndex(where: { $0.id == profile.id }) {
+                    profiles[idx].oauthCredentials = refreshed
+                    ProfileStore.shared.saveProfiles(profiles)
+                    await MainActor.run { ProfileManager.shared.updateProfile(profiles[idx]) }
+                }
+            } catch {
+                LoggingService.shared.logError("OAuth token refresh FAILED for '\(profile.name)': \(error)")
+            }
+        }
+
+        guard !creds.isExpired else {
+            throw AppError(
+                code: .apiUnauthorized,
+                message: "OAuth token expired for '\(profile.name)'",
+                isRecoverable: true,
+                recoverySuggestion: "Re-connect via OAuth in Settings or switch to this account in the CLI"
+            )
+        }
+
+        return try await fetchUsageWithCLIToken(creds.accessToken, profileName: profile.name)
+    }
+
+    /// Makes the actual usage API call using a token that requires the anthropic-beta header.
+    private func fetchUsageWithCLIToken(_ token: String, profileName: String) async throws -> ClaudeUsage {
+        guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else {
+            throw AppError(code: .urlMalformed, message: "Invalid OAuth usage endpoint", isRecoverable: false)
+        }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "GET"
+        request.timeoutInterval = 30
+        request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("claude-code/2.1.5", forHTTPHeaderField: "User-Agent")
+        request.setValue("oauth-2025-04-20", forHTTPHeaderField: "anthropic-beta")
+
+        let (data, response) = try await URLSession.shared.data(for: request)
+
+        guard let httpResponse = response as? HTTPURLResponse else {
+            throw AppError(code: .apiInvalidResponse, message: "Invalid response from OAuth endpoint", isRecoverable: true)
+        }
+
+        guard httpResponse.statusCode == 200 else {
+            let responsePreview = String(data: data, encoding: .utf8)?.prefix(200) ?? ""
+            // 403 = token explicitly revoked → show ⚠️ in UI
+            // 401 = token not supported / temporarily invalid → silent backoff, no ⚠️
+            let errorCode: ErrorCode = httpResponse.statusCode == 403 ? .apiTokenRevoked : .apiUnauthorized
+            throw AppError(
+                code: errorCode,
+                message: "OAuth usage fetch failed for '\(profileName)'",
+                technicalDetails: "Status: \(httpResponse.statusCode)\nResponse: \(responsePreview)",
+                isRecoverable: true,
+                recoverySuggestion: "Switch to this account in the CLI with `claude auth login`"
+            )
+        }
+
+        return try parseUsageResponse(data)
+    }
+
     /// Fetches real usage data from Claude's API
     func fetchUsageData() async throws -> ClaudeUsage {
         let auth = try await getAuthentication()
@@ -429,44 +487,10 @@ class ClaudeAPIService: APIServiceProtocol {
 
             return claudeUsage
 
-        case .cliOAuth:
-            // Use OAuth endpoint (no organization ID needed)
+        case .cliOAuth(let token):
+            // Use OAuth endpoint with anthropic-beta header (no organization ID needed)
             LoggingService.shared.log("ClaudeAPIService: Fetching usage via OAuth endpoint")
-
-            guard let url = URL(string: "https://api.anthropic.com/api/oauth/usage") else {
-                throw AppError(
-                    code: .urlMalformed,
-                    message: "Invalid OAuth usage endpoint",
-                    isRecoverable: false
-                )
-            }
-
-            var request = buildAuthenticatedRequest(url: url, auth: auth)
-            request.httpMethod = "GET"
-            request.timeoutInterval = 30
-
-            let (data, response) = try await URLSession.shared.data(for: request)
-
-            guard let httpResponse = response as? HTTPURLResponse else {
-                throw AppError(
-                    code: .apiInvalidResponse,
-                    message: "Invalid response from OAuth endpoint",
-                    isRecoverable: true
-                )
-            }
-
-            guard httpResponse.statusCode == 200 else {
-                let responsePreview = String(data: data, encoding: .utf8)?.prefix(200) ?? "Unable to read response"
-                throw AppError(
-                    code: .apiUnauthorized,
-                    message: "OAuth authentication failed",
-                    technicalDetails: "Status: \(httpResponse.statusCode)\nResponse: \(responsePreview)",
-                    isRecoverable: true,
-                    recoverySuggestion: "Please re-sync your CLI account in Settings"
-                )
-            }
-
-            return try parseUsageResponse(data)
+            return try await fetchUsageWithCLIToken(token, profileName: ProfileManager.shared.activeProfile?.name ?? "active")
 
         case .consoleAPISession:
             // Console API is for billing/credits only, not usage data

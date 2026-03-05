@@ -17,11 +17,13 @@ class ProfileManager: ObservableObject {
     @Published var displayMode: ProfileDisplayMode = .single
     @Published var multiProfileConfig: MultiProfileDisplayConfig = .default
     @Published var isSwitchingProfile: Bool = false
+    @Published var cliMatchedProfileId: UUID? = nil
 
     private let profileStore = ProfileStore.shared
     private let cliSyncService = ClaudeCodeSyncService.shared
 
     private var switchingSemaphore = false
+    private var cliStatusTimer: Timer?
 
     private init() {}
 
@@ -61,6 +63,25 @@ class ProfileManager: ObservableObject {
         multiProfileConfig = profileStore.loadMultiProfileConfig()
 
         LoggingService.shared.log("ProfileManager: Loaded \(profiles.count) profile(s), active: \(activeProfile?.name ?? "none")")
+
+        // Start CLI status polling and do an initial check
+        startCLIStatusPolling()
+        Task { await refreshCLIAuthStatus() }
+    }
+
+    // MARK: - CLI Auth Status
+
+    func refreshCLIAuthStatus() async {
+        let status = await CLIAuthStatusService.shared.fetchStatus()
+        let matched = profiles.first { $0.name.lowercased() == status?.email.lowercased() }?.id
+        cliMatchedProfileId = matched
+    }
+
+    private func startCLIStatusPolling() {
+        cliStatusTimer?.invalidate()
+        cliStatusTimer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
+            Task { [weak self] in await self?.refreshCLIAuthStatus() }
+        }
     }
 
     // MARK: - Profile Operations
@@ -355,6 +376,44 @@ class ProfileManager: ObservableObject {
         // Save to persistent storage
         profileStore.saveProfiles(profiles)
         LoggingService.shared.log("Saved Claude usage for profile: \(profiles[index].name)")
+
+        // Write statusline cache for all profiles so the CLI statusline script can read it
+        writeStatuslineCache()
+    }
+
+    /// Writes ~/.claude/usage-cache.json with current usage for all profiles.
+    /// The statusline script reads this file instead of making direct API calls.
+    private func writeStatuslineCache() {
+        let cacheURL = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".claude/usage-cache.json")
+
+        var entries: [[String: Any]] = []
+        for profile in profiles {
+            guard let usage = profile.claudeUsage else {
+                LoggingService.shared.log("writeStatuslineCache: skipping '\(profile.name)' — no claudeUsage")
+                continue
+            }
+            var entry: [String: Any] = [
+                "email":       profile.name,
+                "utilization": Int(usage.sessionPercentage),
+            ]
+            let formatter = ISO8601DateFormatter()
+            formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+            entry["resetsAt"] = formatter.string(from: usage.sessionResetTime)
+            entries.append(entry)
+        }
+
+        LoggingService.shared.log("writeStatuslineCache: writing \(entries.count) entries to \(cacheURL.path)")
+        guard let data = try? JSONSerialization.data(withJSONObject: entries, options: .prettyPrinted) else {
+            LoggingService.shared.logError("writeStatuslineCache: JSON serialization failed")
+            return
+        }
+        do {
+            try data.write(to: cacheURL)
+            LoggingService.shared.log("writeStatuslineCache: wrote \(data.count) bytes")
+        } catch {
+            LoggingService.shared.logError("writeStatuslineCache: write failed: \(error)")
+        }
     }
 
     /// Loads Claude usage data for a specific profile
